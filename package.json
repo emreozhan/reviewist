@@ -14,7 +14,10 @@
     "start": "node bin/reviewist.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.check.json && tsc -p web/tsconfig.json",
-    "fixture": "node scripts/make-fixture.mjs"
+    "fixture": "node scripts/make-fixture.mjs",
+    "build:server": "tsc -p tsconfig.json",
+    "test:server": "vitest run src/sources src/server",
+    "test:core": "vitest run src/core"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

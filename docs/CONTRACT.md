@@ -45,6 +45,7 @@ export interface BuildReviewOptions {
   id?: string;                 // verilmezse üretilir
   maxIndexFiles?: number;      // repo indeksi için en fazla .java dosyası (varsayılan 5000)
   onProgress?: (msg: string) => void;
+  onTimings?: (timings: Record<string, number>) => void; // aşama süreleri (ms)
 }
 export async function buildReview(cs: ChangeSet, opts?: BuildReviewOptions): Promise<ReviewModel>;
 ```
@@ -53,3 +54,11 @@ export async function buildReview(cs: ChangeSet, opts?: BuildReviewOptions): Pro
 
 `npm run fixture` → `fixtures/sample-repo` (git deposu). `main` dalı taban, `feature/ai-refactor` dalı büyük AI tarzı değişiklik,
 `feature/small-fix` küçük değişiklik. Beklenen analiz sonuçları `fixtures/EXPECTED.md` içinde.
+
+## Tur 2 eklemeleri
+
+- `ReviewSourceInfo.stableKey`: görüldü/not kalıcılığı için kaynak başına kararlı anahtar (`git:<repo>:<base>...<head>:<mode>`, `worktree:…`, `github:<host>/<o>/<r>#<n>`, `patch:<sha1>`).
+- İş API'si: `POST /api/jobs` → `ReviewJob` (202), `GET /api/jobs/:id` ile ilerleme sorgulanır. Aynı anda en çok 2 analiz.
+- `ImpactNode.range` / `rangeSide`: diff dışı önizleme için bildirim aralığı. `rangeSide === 'old'` ise dosya `FileChange.oldPath ?? path` ile old tarafından okunur.
+- `CallSite.args?: string[]` (model.ts): argüman metinleri; tip uyuşmazlığı tespiti için.
+- `ChangeFlag 'supertypes'`, `ApiError.field`, `DELETE /api/reviews/:id`.
