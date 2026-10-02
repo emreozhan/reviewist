@@ -1,0 +1,85 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { FileChange, TypeChange } from '../../../../src/shared/types';
+import { useFileContent } from '../../hooks/queries';
+import { useHighlighted } from '../../hooks/useHighlighted';
+import { buildSymbolMap } from '../../lib/diffPresentation';
+import { buildDiffRows } from '../../lib/diffRows';
+import { langFor } from '../../lib/highlight';
+import { useUi } from '../../state/uiStore';
+import { useReviewCtx } from '../workspace/ReviewContext';
+import { SplitTable } from './SplitTable';
+import { UnifiedTable } from './UnifiedTable';
+
+/** Tam dosya diff'i: birleşik/yan yana, sözdizimi renklendirme, üye sınırları, bağlam genişletme. */
+export function DiffView({ file }: { file: FileChange }) {
+  const { review, index } = useReviewCtx();
+  const layout = useUi((s) => s.diffLayout);
+  const selectedSymbolId = useUi((s) => s.selectedSymbolId);
+  const selectSymbol = useUi((s) => s.selectSymbol);
+  const focusLine = useUi((s) => s.focusLine);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [expandAll, setExpandAll] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const newQ = useFileContent(review.id, file.status === 'deleted' ? undefined : file.path, 'new');
+  const oldQ = useFileContent(review.id, file.status === 'added' ? undefined : (file.oldPath ?? file.path), 'old');
+  const lang = langFor(file.language);
+  const newHl = useHighlighted(newQ.content, lang);
+  const oldHl = useHighlighted(oldQ.content, lang);
+
+  const rows = useMemo(
+    () => buildDiffRows(file.hunks, { newLines: newQ.lines ?? undefined, expandedGaps: expanded, expandAll }),
+    [file.hunks, newQ.lines, expanded, expandAll],
+  );
+  const types = useMemo(
+    () => file.typeIds.map((id) => index.typeById.get(id)).filter((t): t is TypeChange => !!t),
+    [file.typeIds, index],
+  );
+  const oldMap = useMemo(() => buildSymbolMap(types, 'old'), [types]);
+  const newMap = useMemo(() => buildSymbolMap(types, 'new'), [types]);
+
+  useEffect(() => {
+    if (!focusLine || focusLine.fileId !== file.id) return;
+    const el = rootRef.current?.querySelector<HTMLElement>(`tr[data-new="${focusLine.line}"]`);
+    if (!el) {
+      setExpandAll(true);
+      return;
+    }
+    el.scrollIntoView({ block: 'center' });
+    el.classList.remove('is-flash');
+    void el.offsetWidth;
+    el.classList.add('is-flash');
+  }, [focusLine, file.id, rows]);
+
+  const contentMissing = file.status !== 'deleted' && newQ.isFetched && newQ.content === null;
+  const hasGaps = rows.some((r) => r.kind === 'gap' && r.expandable);
+  const props = {
+    rows,
+    lang,
+    oldHl,
+    newHl,
+    oldMap: types.length > 0 ? oldMap : undefined,
+    newMap: types.length > 0 ? newMap : undefined,
+    selectedSymbolId,
+    onSelectSymbol: (id: string) => selectSymbol(id, file.id),
+    onExpand: (id: string) => setExpanded((s) => new Set([...s, id])),
+    label: `${file.path} farkı`,
+  };
+
+  return (
+    <div className="diffview" ref={rootRef}>
+      <div className="diffview__bar">
+        {file.hunks.length === 0 && <span className="muted">İçerik farkı yok (yalnızca yeniden adlandırma veya kip değişikliği).</span>}
+        {contentMissing && <span className="muted">Tam dosya içeriği alınamadı; yalnız hunk'lar gösteriliyor.</span>}
+        {newQ.isFetching && <span className="muted">İçerik yükleniyor…</span>}
+        <span className="diffview__spacer" />
+        {(hasGaps || expandAll) && (
+          <button type="button" className="btn btn--sm btn--ghost" onClick={() => setExpandAll((v) => !v)} aria-pressed={expandAll}>
+            {expandAll ? 'Yalnız değişiklikler' : 'Tüm dosyayı göster'}
+          </button>
+        )}
+      </div>
+      <div className="code-surface">{layout === 'split' ? <SplitTable {...props} /> : <UnifiedTable {...props} />}</div>
+    </div>
+  );
+}

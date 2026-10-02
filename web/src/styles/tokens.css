@@ -1,0 +1,193 @@
+/* Reviewist tasarım belirteçleri — "hassas ölçüm aleti": koyu grafit, fosfor vurgu, anlamlı durum renkleri. */
+
+:root {
+  color-scheme: dark;
+
+  --font-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-code: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
+  --font-gauge: 'Martian Mono Variable', 'IBM Plex Mono', monospace;
+  --font-display: 'Fraunces Variable', Georgia, serif;
+
+  --fs-xxs: 10px;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+  --fs-code: 12.5px;
+  --lh-code: 20px;
+
+  --r-sm: 3px;
+  --r-md: 5px;
+  --r-lg: 8px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Yüzeyler */
+  --bg: #0d1012;
+  --bg-grid: rgba(255, 255, 255, 0.025);
+  --surface: #13171a;
+  --surface-2: #181d21;
+  --surface-3: #1f252a;
+  --code-bg: #101315;
+  --line: #242c32;
+  --line-strong: #33404a;
+  --text: #dfe5ea;
+  --text-dim: #9aa6b0;
+  --text-faint: #65717b;
+  --text-on-accent: #0d1012;
+
+  /* Vurgu: fosfor şartröz (odak, seçim, ilerleme) */
+  --accent: #cdee6a;
+  --accent-dim: rgba(205, 238, 106, 0.14);
+  --accent-line: rgba(205, 238, 106, 0.45);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  /* Durumlar: renk + glif birlikte kullanılır (renk körlüğüne dayanıklı) */
+  --st-added: #5cc98a;
+  --st-removed: #ef6b5b;
+  --st-modified: #e3b341;
+  --st-signature: #e374ad;
+  --st-renamed: #4cc4c4;
+  --st-moved: #6cb6f0;
+  --st-cosmetic: #7d8a94;
+  --st-unchanged: #56616a;
+  --st-impacted: #b8c4cf;
+
+  /* Risk ölçeği */
+  --risk-low: #6f9180;
+  --risk-medium: #d2b04c;
+  --risk-high: #f0883e;
+  --risk-critical: #ff5a52;
+
+  /* Önem */
+  --sev-error: var(--risk-critical);
+  --sev-warning: var(--risk-high);
+  --sev-info: #7fa6c9;
+
+  /* Diff */
+  --diff-add-bg: rgba(92, 201, 138, 0.09);
+  --diff-add-gutter: rgba(92, 201, 138, 0.18);
+  --diff-add-word: rgba(92, 201, 138, 0.34);
+  --diff-del-bg: rgba(239, 107, 91, 0.09);
+  --diff-del-gutter: rgba(239, 107, 91, 0.18);
+  --diff-del-word: rgba(239, 107, 91, 0.34);
+  --diff-focus: rgba(205, 238, 106, 0.12);
+
+  /* Sözdizimi */
+  --hl-keyword: #8fb7e8;
+  --hl-type: #e6cf8f;
+  --hl-string: #a3d08e;
+  --hl-number: #e8a37c;
+  --hl-comment: #6b7882;
+  --hl-meta: #d6a0cf;
+  --hl-title: #f0f3f5;
+  --hl-attr: #9fd3d0;
+
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--line-strong);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #efede6;
+    --bg-grid: rgba(0, 0, 0, 0.035);
+    --surface: #f8f7f2;
+    --surface-2: #f1efe8;
+    --surface-3: #e7e4da;
+    --code-bg: #fcfbf8;
+    --line: #dcd8cc;
+    --line-strong: #c4bfb0;
+    --text: #1a1e21;
+    --text-dim: #545e66;
+    --text-faint: #858d93;
+    --text-on-accent: #f8f7f2;
+    --accent: #4d6b00;
+    --accent-dim: rgba(77, 107, 0, 0.1);
+    --accent-line: rgba(77, 107, 0, 0.45);
+    --st-added: #1d8549;
+    --st-removed: #c63d2c;
+    --st-modified: #9a6f00;
+    --st-signature: #b3307a;
+    --st-renamed: #0c8080;
+    --st-moved: #1d68b0;
+    --st-cosmetic: #6b7780;
+    --st-unchanged: #9aa2a8;
+    --st-impacted: #4f5f6e;
+    --risk-low: #4f7a63;
+    --risk-medium: #9a7a00;
+    --risk-high: #c25f10;
+    --risk-critical: #c8231b;
+    --sev-info: #3c6c99;
+    --diff-add-bg: rgba(29, 133, 73, 0.08);
+    --diff-add-gutter: rgba(29, 133, 73, 0.16);
+    --diff-add-word: rgba(29, 133, 73, 0.24);
+    --diff-del-bg: rgba(198, 61, 44, 0.07);
+    --diff-del-gutter: rgba(198, 61, 44, 0.15);
+    --diff-del-word: rgba(198, 61, 44, 0.22);
+    --diff-focus: rgba(77, 107, 0, 0.1);
+    --hl-keyword: #2a5d9f;
+    --hl-type: #845b00;
+    --hl-string: #2f7a2a;
+    --hl-number: #a5481c;
+    --hl-comment: #868e93;
+    --hl-meta: #8e3d86;
+    --hl-title: #111518;
+    --hl-attr: #0b6f6b;
+    --shadow-pop: 0 12px 32px rgba(40, 36, 20, 0.18), 0 0 0 1px var(--line-strong);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #efede6;
+  --bg-grid: rgba(0, 0, 0, 0.035);
+  --surface: #f8f7f2;
+  --surface-2: #f1efe8;
+  --surface-3: #e7e4da;
+  --code-bg: #fcfbf8;
+  --line: #dcd8cc;
+  --line-strong: #c4bfb0;
+  --text: #1a1e21;
+  --text-dim: #545e66;
+  --text-faint: #858d93;
+  --text-on-accent: #f8f7f2;
+  --accent: #4d6b00;
+  --accent-dim: rgba(77, 107, 0, 0.1);
+  --accent-line: rgba(77, 107, 0, 0.45);
+  --st-added: #1d8549;
+  --st-removed: #c63d2c;
+  --st-modified: #9a6f00;
+  --st-signature: #b3307a;
+  --st-renamed: #0c8080;
+  --st-moved: #1d68b0;
+  --st-cosmetic: #6b7780;
+  --st-unchanged: #9aa2a8;
+  --st-impacted: #4f5f6e;
+  --risk-low: #4f7a63;
+  --risk-medium: #9a7a00;
+  --risk-high: #c25f10;
+  --risk-critical: #c8231b;
+  --sev-info: #3c6c99;
+  --diff-add-bg: rgba(29, 133, 73, 0.08);
+  --diff-add-gutter: rgba(29, 133, 73, 0.16);
+  --diff-add-word: rgba(29, 133, 73, 0.24);
+  --diff-del-bg: rgba(198, 61, 44, 0.07);
+  --diff-del-gutter: rgba(198, 61, 44, 0.15);
+  --diff-del-word: rgba(198, 61, 44, 0.22);
+  --diff-focus: rgba(77, 107, 0, 0.1);
+  --hl-keyword: #2a5d9f;
+  --hl-type: #845b00;
+  --hl-string: #2f7a2a;
+  --hl-number: #a5481c;
+  --hl-comment: #868e93;
+  --hl-meta: #8e3d86;
+  --hl-title: #111518;
+  --hl-attr: #0b6f6b;
+  --shadow-pop: 0 12px 32px rgba(40, 36, 20, 0.18), 0 0 0 1px var(--line-strong);
+}
