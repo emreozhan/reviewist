@@ -18,9 +18,11 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
   const fileName = item.file ? baseName(item.file) : '';
   const loc = !item.file
     ? 'konum bilinmiyor'
-    : fileName === `${typeName}.java`
-      ? (item.line ? `:${item.line}` : '')
-      : `${fileName}${item.line ? `:${item.line}` : ''}`;
+    : item.guessed
+      ? `~${fileName}`
+      : fileName === `${typeName}.java`
+        ? (item.line ? `:${item.line}` : '')
+        : `${fileName}${item.line ? `:${item.line}` : ''}`;
 
   const go = () => {
     if (!item.file) return;
@@ -34,7 +36,7 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
     <>
       {item.status ? <StatusGlyph status={item.inDiff ? item.status : 'impacted'} size="sm" /> : <span className="pitem__dot" aria-hidden="true" />}
       <span className="pitem__label">{item.label}</span>
-      <span className="pitem__loc">{loc}</span>
+      <span className="pitem__loc" title={item.guessed ? `Konum tahmini (paket adından): ${item.file}` : item.file}>{loc}</span>
       {item.confidence && item.confidence !== 'exact' && <span className={`pitem__conf pitem__conf--${item.confidence}`}>{CONFIDENCE_LABEL[item.confidence]}</span>}
       {isCall && item.inDiff && item.inChangedCode === false && <span className="pitem__flag" title="Çağrı satırı bu diff'te değişmedi">satır değişmedi</span>}
     </>
@@ -58,7 +60,7 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
         <span className="pitem__tag">diff dışı</span>
         <span className="pitem__go" aria-hidden="true">{open ? '▾' : '▸'}</span>
       </button>
-      {open && item.file && <ExternalPreview file={item.file} line={item.line} search={item.search} />}
+      {open && item.file && <ExternalPreview file={item.file} line={item.line} symbolId={isCall ? undefined : item.id} side={item.side} guessed={item.guessed} />}
     </li>
   );
 }

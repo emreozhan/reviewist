@@ -92,6 +92,7 @@ function build(): ReviewModel {
       prUrl: 'https://github.com/acme/shop/pull/482',
       prNumber: 482,
       author: 'ai-refactor-bot',
+      stableKey: 'github:acme/shop#482',
       description: 'Ödeme çağrılarına idempotency anahtarı eklendi, doğrulama ayrı bileşene taşındı, bildirimler sadeleştirildi.',
     },
     files,

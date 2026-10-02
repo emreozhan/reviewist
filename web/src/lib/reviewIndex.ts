@@ -90,13 +90,6 @@ export function symbolLabel(index: ReviewIndex, id: string): string {
   return index.nodeById.get(id)?.label ?? shortId(id);
 }
 
-/** Sembol diff içindeyse dosyası; değilse graf düğümündeki dosya. */
-export function symbolLocation(index: ReviewIndex, id: string): { file?: string; inDiff: boolean } {
-  const inDiff = index.symbolFile.get(id);
-  if (inDiff) return { file: inDiff, inDiff: true };
-  return { file: index.nodeById.get(id)?.file, inDiff: false };
-}
-
 /**
  * Diff dışındaki bir sembol için onu etkileyen diff içi sembol: çağırdığı, override ettiği
  * ya da alt tipi olduğu değişen sembol.

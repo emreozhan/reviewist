@@ -13,6 +13,9 @@ export function CenterPanel() {
   const file = fileId ? index.fileById.get(fileId) : undefined;
 
   useEffect(() => {
+    // Satıra gitme isteği varsa kaydırmayı diff tablosu yapar; burada başa sarmak onu ezer.
+    const focus = useUi.getState().focusLine;
+    if (focus && focus.fileId === fileId) return;
     scrollRef.current?.scrollTo({ top: 0 });
   }, [fileId]);
 

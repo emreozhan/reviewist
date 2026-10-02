@@ -59,8 +59,18 @@ export function navigate(route: Route, replace = false): void {
   }
 }
 
-/** Hash'i olay tetiklemeden günceller (seçim değişince adres çubuğunu senkron tutmak için). */
-export function replaceHashSilently(route: Route): void {
+/** pushState/replaceState `hashchange` tetiklemez; useHashRoute bu olayla haberdar edilir. */
+export const ROUTE_EVENT = 'reviewist:route';
+
+/**
+ * Seçimi adrese yazar. `push`: yeni geçmiş kaydı (geri/ileri ile dönülebilir); değilse mevcut kaydı değiştirir.
+ * Yazılan hash'i döndürür (değişiklik yoksa null).
+ */
+export function writeHash(route: Route, push: boolean): string | null {
   const hash = formatHash(route);
-  if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
+  if (window.location.hash === hash) return null;
+  if (push) window.history.pushState(null, '', hash);
+  else window.history.replaceState(null, '', hash);
+  window.dispatchEvent(new Event(ROUTE_EVENT));
+  return hash;
 }

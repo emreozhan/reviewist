@@ -6,20 +6,30 @@ import { Switch } from '../../components/Switch';
 import { useRefs } from '../../hooks/queries';
 import { RefCombobox } from './RefCombobox';
 import { RepoPathField } from './RepoPathField';
+import type { ServerFieldError } from './serverFieldError';
+import { serverErrorFor } from './serverFieldError';
 
 export interface SourceFormProps {
   config?: AppConfig;
   pending: boolean;
   onSubmit: (req: ReviewRequest) => void;
+  /** Sunucunun alan hatası (ApiError.field). */
+  serverError?: ServerFieldError;
+  onEdit?: () => void;
 }
 
-export function GitSourceForm({ config, pending, onSubmit }: SourceFormProps) {
+export function GitSourceForm({ config, pending, onSubmit, serverError, onEdit }: SourceFormProps) {
   const [repoPath, setRepoPath] = useState(config?.defaultRepoPath ?? '');
   const [committed, setCommitted] = useState(config?.defaultRepoPath ?? '');
   const [base, setBase] = useState('');
   const [head, setHead] = useState('');
   const [mergeBase, setMergeBase] = useState(true);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [localErrors, setErrors] = useState<Record<string, string>>({});
+  const errors: Record<string, string | undefined> = {
+    repoPath: localErrors.repoPath ?? serverErrorFor(serverError, 'git', 'repoPath'),
+    base: localErrors.base ?? serverErrorFor(serverError, 'git', 'base'),
+    head: localErrors.head ?? serverErrorFor(serverError, 'git', 'head'),
+  };
   const refs = useRefs(committed);
 
   useEffect(() => {
@@ -41,7 +51,7 @@ export function GitSourceForm({ config, pending, onSubmit }: SourceFormProps) {
   };
 
   return (
-    <form className="source-form" onSubmit={submit} noValidate>
+    <form className="source-form" onSubmit={submit} onChange={onEdit} noValidate>
       <RepoPathField id="git-repo" value={repoPath} onChange={setRepoPath} onCommit={() => setCommitted(repoPath.trim())} refsQuery={committed ? refs : undefined} error={errors.repoPath} />
       <div className="source-form__row">
         <Field id="git-base" label="Taban (base)" error={errors.base} hint="Dal, etiket ya da commit">

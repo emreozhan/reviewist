@@ -3,14 +3,16 @@ import type { GapRow } from '../../lib/diffRows';
 interface GapCellProps {
   gap: GapRow;
   colSpan: number;
+  /** Pencereleme için öğe indeksi. */
+  vi?: number;
   onExpand?: (id: string) => void;
 }
 
 /** Hunk arası değişmeyen satırlar: içerik varsa açılabilir ("bağlamı genişlet"). */
-export function GapCell({ gap, colSpan, onExpand }: GapCellProps) {
+export function GapCell({ gap, colSpan, onExpand, vi }: GapCellProps) {
   const label = gap.count === null ? 'gizli satırlar' : `${gap.count} değişmeyen satır`;
   return (
-    <tr className="dl-gap">
+    <tr className="dl-gap" data-vi={vi}>
       <td colSpan={colSpan}>
         {gap.expandable && onExpand ? (
           <button type="button" className="dl-gap__btn" onClick={() => onExpand(gap.id)} title="Bağlamı genişlet">

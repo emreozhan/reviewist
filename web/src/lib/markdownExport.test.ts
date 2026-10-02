@@ -3,7 +3,7 @@ import { S } from '../mock/ids';
 import { PATHS } from '../mock/samplePaths';
 import { sampleReview } from '../mock/sampleReview';
 import { buildMarkdown } from './markdownExport';
-import { fileNoteKey, loadState, saveState, storageKey, symbolNoteKey } from './persistence';
+import { fileNoteKey, legacyStorageKey, loadState, loadStateMigrating, saveState, storageKey, symbolNoteKey } from './persistence';
 import type { KeyValueStorage } from './persistence';
 import { buildIndex } from './reviewIndex';
 
@@ -35,12 +35,27 @@ describe('buildMarkdown', () => {
 describe('kalıcılık', () => {
   function memory(): KeyValueStorage & { data: Map<string, string> } {
     const data = new Map<string, string>();
-    return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v) };
+    return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
   }
 
-  it('anahtar head sha üzerinden kurulur', () => {
-    expect(storageKey(sampleReview)).toBe(`reviewist:${sampleReview.source.headSha}`);
-    expect(storageKey({ id: 'x', source: { ...sampleReview.source, headSha: undefined } })).toBe('reviewist:x');
+  it('anahtar stableKey üzerinden kurulur; eski anahtar head sha ya da id', () => {
+    expect(storageKey(sampleReview)).toBe(`reviewist:${sampleReview.source.stableKey}`);
+    expect(legacyStorageKey(sampleReview)).toBe(`reviewist:${sampleReview.source.headSha}`);
+    expect(legacyStorageKey({ id: 'x', source: { ...sampleReview.source, headSha: undefined } })).toBe('reviewist:x');
+    // stableKey göndermeyen eski sunucu: eski anahtara düşer.
+    expect(storageKey({ id: 'x', source: { ...sampleReview.source, stableKey: '' } })).toBe(`reviewist:${sampleReview.source.headSha}`);
+  });
+
+  it('eski anahtardaki durumu bir kerelik yeni anahtara taşır', () => {
+    const s = memory();
+    s.data.set('old', JSON.stringify({ seen: { a: true }, notes: { n: 'not' } }));
+    expect(loadStateMigrating('new', 'old', s)).toEqual({ seen: { a: true }, notes: { n: 'not' } });
+    expect(s.data.has('old')).toBe(false);
+    expect(JSON.parse(s.data.get('new') ?? '{}')).toEqual({ seen: { a: true }, notes: { n: 'not' } });
+    // Yeni anahtarda kayıt varsa eskisine bakılmaz.
+    s.data.set('old', JSON.stringify({ seen: { b: true }, notes: {} }));
+    expect(loadStateMigrating('new', 'old', s)).toEqual({ seen: { a: true }, notes: { n: 'not' } });
+    expect(s.data.has('old')).toBe(true);
   });
 
   it('kaydeder, boş notları ve false değerleri atar, geri okur', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { FileChange, TypeChange } from '../../../../src/shared/types';
 import { useFileContent } from '../../hooks/queries';
 import { useHighlighted } from '../../hooks/useHighlighted';
@@ -19,7 +19,6 @@ export function DiffView({ file }: { file: FileChange }) {
   const focusLine = useUi((s) => s.focusLine);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [expandAll, setExpandAll] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
 
   const newQ = useFileContent(review.id, file.status === 'deleted' ? undefined : file.path, 'new');
   const oldQ = useFileContent(review.id, file.status === 'added' ? undefined : (file.oldPath ?? file.path), 'old');
@@ -38,18 +37,11 @@ export function DiffView({ file }: { file: FileChange }) {
   const oldMap = useMemo(() => buildSymbolMap(types, 'old'), [types]);
   const newMap = useMemo(() => buildSymbolMap(types, 'new'), [types]);
 
-  useEffect(() => {
-    if (!focusLine || focusLine.fileId !== file.id) return;
-    const el = rootRef.current?.querySelector<HTMLElement>(`tr[data-new="${focusLine.line}"]`);
-    if (!el) {
-      setExpandAll(true);
-      return;
-    }
-    el.scrollIntoView({ block: 'center' });
-    el.classList.remove('is-flash');
-    void el.offsetWidth;
-    el.classList.add('is-flash');
-  }, [focusLine, file.id, rows]);
+  // Satırlar tam içerikle yeniden kurulur: odak, içerik yüklenince (ya da alınamayınca) uygulanır.
+  const contentSettled = file.status === 'deleted' || !newQ.isPending;
+  const focus = contentSettled && focusLine && focusLine.fileId === file.id ? focusLine : null;
+  // Odak satırı kapalı bağlamdaysa tüm dosyayı aç; satır görünür olunca tablo oraya kaydırır.
+  const onFocusMissing = useCallback(() => setExpandAll(true), []);
 
   const contentMissing = file.status !== 'deleted' && newQ.isFetched && newQ.content === null;
   const hasGaps = rows.some((r) => r.kind === 'gap' && r.expandable);
@@ -63,11 +55,13 @@ export function DiffView({ file }: { file: FileChange }) {
     selectedSymbolId,
     onSelectSymbol: (id: string) => selectSymbol(id, file.id),
     onExpand: (id: string) => setExpanded((s) => new Set([...s, id])),
+    focus,
+    onFocusMissing,
     label: `${file.path} farkı`,
   };
 
   return (
-    <div className="diffview" ref={rootRef}>
+    <div className="diffview">
       <div className="diffview__bar">
         {file.hunks.length === 0 && <span className="muted">İçerik farkı yok (yalnızca yeniden adlandırma veya kip değişikliği).</span>}
         {contentMissing && <span className="muted">Tam dosya içeriği alınamadı; yalnız hunk'lar gösteriliyor.</span>}

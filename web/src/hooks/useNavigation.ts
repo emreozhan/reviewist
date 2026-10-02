@@ -7,7 +7,9 @@ import { useUi } from '../state/uiStore';
 function setTab(reviewId: string, tab: Tab): void {
   const current = parseHash(window.location.hash);
   if (current.name === 'review' && current.tab === tab) return;
-  navigate({ name: 'review', id: reviewId, tab, params: {} });
+  // Seçim adreste kalır: sekme geçişi geri tuşuyla aynı seçimle geri alınabilir.
+  const params = current.name === 'review' && current.id === reviewId ? { ...current.params, line: undefined } : {};
+  navigate({ name: 'review', id: reviewId, tab, params });
 }
 
 /** Bulgu, graf düğümü veya yayılım öğesinden çalışma alanındaki dosya/sembol/satıra gitme. */

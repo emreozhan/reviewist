@@ -36,7 +36,8 @@ interface UiState {
   selectFile: (fileId: string, opts?: { keepSymbol?: boolean }) => void;
   selectSymbol: (symbolId: string | null, fileId?: string) => void;
   goToLine: (fileId: string, line: number, symbolId?: string) => void;
-  setCenterView: (v: CenterView) => void;
+  /** null: dosya türüne göre otomatik. */
+  setCenterView: (v: CenterView | null) => void;
   setDiffLayout: (l: DiffLayout) => void;
   setNavMode: (m: NavMode) => void;
   setFilters: (patch: Partial<NavFilters>) => void;

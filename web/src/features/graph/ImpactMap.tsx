@@ -5,6 +5,7 @@ import { defaultGraphFilter, selectSubgraph } from '../../lib/graphLayout';
 import { useTheme } from '../../state/theme';
 import { useUi } from '../../state/uiStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
+import { AutoFit, FIT_OPTIONS } from './AutoFit';
 import { GraphLegend } from './GraphLegend';
 import { GraphNode } from './GraphNode';
 import { GraphNodeCard } from './GraphNodeCard';
@@ -29,6 +30,8 @@ export function ImpactMap() {
   const flow = useMemo(() => toFlow(sub, positions, selectedId), [sub, positions, selectedId]);
   const selectedNode = selectedId ? sub.nodes.find((n) => n.id === selectedId) : undefined;
   const big = sub.nodes.length > 150;
+  // Filtre ya da düğüm kümesi değişince yeniden sığdır (seçim değişimi sığdırmayı tetiklemez).
+  const fitSignature = useMemo(() => `${JSON.stringify(filter)}|${sub.nodes.length}|${sub.edges.length}`, [filter, sub]);
 
   const onNodeClick: NodeMouseHandler<ImpactFlowNode> = (_e, node) => setSelectedId((cur) => (cur === node.id ? null : node.id));
 
@@ -50,12 +53,13 @@ export function ImpactMap() {
             elementsSelectable
             onlyRenderVisibleElements={big}
             fitView
-            fitViewOptions={{ padding: 0.12, minZoom: 0.45, maxZoom: 1.1 }}
+            fitViewOptions={FIT_OPTIONS}
             minZoom={0.1}
             maxZoom={2}
             proOptions={{ hideAttribution: true }}
             colorMode={themePref}
           >
+            <AutoFit signature={fitSignature} />
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} />
             <Controls showInteractive={false} position="bottom-left" />
             <MiniMap<ImpactFlowNode> pannable zoomable className="gmap__mini" nodeClassName={(n) => `mini-${n.data.node.status}`} />

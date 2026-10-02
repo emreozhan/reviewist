@@ -1,12 +1,15 @@
 import type { ImpactEdge, ImpactNodeStatus } from '../../../../src/shared/types';
+import { useState } from 'react';
 import { EDGE_LABEL, STATUS_META } from '../../lib/labels';
 
 const STATUSES: ImpactNodeStatus[] = ['signatureChanged', 'modified', 'added', 'removed', 'renamed', 'moved', 'cosmetic', 'impacted', 'unchanged'];
 const EDGES: ImpactEdge['kind'][] = ['calls', 'overrides', 'extends', 'implements', 'contains', 'tests'];
 
+/** Lejant varsayılan olarak daraltılmış açılır: grafı kapatmasın. */
 export function GraphLegend() {
+  const [open, setOpen] = useState(false);
   return (
-    <details className="glegend" open>
+    <details className="glegend" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className="glegend__summary">Lejant</summary>
       <p className="glegend__title">Düğüm</p>
       <ul className="glegend__list">

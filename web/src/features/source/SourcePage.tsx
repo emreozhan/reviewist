@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { ErrorPanel } from '../../components/ErrorPanel';
+import { isApiError } from '../../lib/api';
 import { MockBadge } from '../../components/MockBadge';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { useConfig } from '../../hooks/queries';
@@ -8,6 +9,8 @@ import { useApiMode } from '../../state/apiMode';
 import { AnalysisProgress } from './AnalysisProgress';
 import { RecentReviews } from './RecentReviews';
 import { SourceTabs } from './SourceTabs';
+import type { ServerFieldError } from './serverFieldError';
+import { formHasField } from './serverFieldError';
 import { useCreateReview } from './useCreateReview';
 
 /** initialReviewId yönlendirmesi oturumda yalnız bir kez yapılır. */
@@ -18,6 +21,14 @@ export function SourcePage() {
   const create = useCreateReview();
   const mock = useApiMode((s) => s.mock);
   const enableMock = useApiMode((s) => s.enableMock);
+  const failedKind = create.variables?.kind;
+  const serverError: ServerFieldError | undefined =
+    create.isError && isApiError(create.error) && create.error.field && failedKind && formHasField(failedKind, create.error.field)
+      ? { kind: failedKind, field: create.error.field, message: create.error.message }
+      : undefined;
+  const clearServerError = () => {
+    if (create.isError) create.reset();
+  };
 
   useEffect(() => {
     const id = config.data?.initialReviewId;
@@ -64,20 +75,22 @@ export function SourcePage() {
                 }
               />
             )}
-            {create.isPending ? (
-              <AnalysisProgress onCancel={create.cancel} />
-            ) : (
-              <>
-                {config.isPending ? (
-                  <p className="muted">Yapılandırma okunuyor…</p>
-                ) : (
-                  <SourceTabs config={config.data} pending={create.isPending} onSubmit={(req) => create.mutate(req)} />
-                )}
-                {create.isError && (
-                  <ErrorPanel error={create.error} title="Analiz başlatılamadı" />
-                )}
-              </>
-            )}
+            {create.isPending && <AnalysisProgress progress={create.progress} onCancel={create.cancel} />}
+            {/* İlerleme sırasında form gizlenir ama bağlı kalır: hata sonrası girilen değerler kaybolmaz. */}
+            <div hidden={create.isPending}>
+              {config.isPending ? (
+                <p className="muted">Yapılandırma okunuyor…</p>
+              ) : (
+                <SourceTabs
+                  config={config.data}
+                  pending={create.isPending}
+                  onSubmit={(req) => create.mutate(req)}
+                  serverError={serverError}
+                  onEdit={clearServerError}
+                />
+              )}
+              {create.isError && !serverError && <ErrorPanel error={create.error} title="Analiz başlatılamadı" />}
+            </div>
           </div>
           <aside className="home__side">
             <RecentReviews />

@@ -79,6 +79,7 @@ export const FLAG_LABEL: Record<ChangeFlag, string> = {
   typeParams: 'tip parametreleri',
   fieldType: 'alan tipi',
   initializer: 'başlatıcı',
+  supertypes: 'üst tip/arayüz',
 };
 
 export const CONFIDENCE_LABEL: Record<CallRef['confidence'], string> = {

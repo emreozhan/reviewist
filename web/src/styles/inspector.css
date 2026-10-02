@@ -345,6 +345,14 @@
   font-size: var(--fs-xs);
 }
 
+.xprev__hint {
+  margin: 0;
+  padding: 4px 8px 0;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-style: italic;
+}
+
 .xprev__code {
   margin: 0;
   padding: 4px 0;

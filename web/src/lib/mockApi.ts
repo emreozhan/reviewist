@@ -1,4 +1,4 @@
-import type { AppConfig, GitRefs, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
+import type { AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 
@@ -22,6 +22,29 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 const created: ReviewModel[] = [];
+const deleted = new Set<string>();
+
+/** Mock iş zaman çizelgesi: başlangıçtan bu kadar ms sonra bu mesaj eklenir. */
+const JOB_TIMELINE: { at: number; message: string }[] = [
+  { at: 0, message: 'Değişiklikler okunuyor: main...feature/ai-refactor' },
+  { at: 350, message: '20 dosya, 9 Java dosyası değişmiş' },
+  { at: 800, message: 'Java dosyaları ayrıştırılıyor: 9/9' },
+  { at: 1300, message: 'Repo indeksi: 412/1250 dosya' },
+  { at: 1700, message: 'Repo indeksi: 1250/1250 dosya' },
+  { at: 2100, message: 'Çağıranlar ve alt tipler çözülüyor' },
+  { at: 2500, message: 'Risk, gruplar ve okuma planı hesaplanıyor' },
+];
+const JOB_DURATION_MS = 2800;
+
+interface MockJob {
+  id: string;
+  started: number;
+  startedAt: string;
+  req: ReviewRequest;
+  reviewId?: string;
+}
+const jobs = new Map<string, MockJob>();
+let jobSeq = 0;
 
 function titleFor(req: ReviewRequest): string | null {
   switch (req.kind) {
@@ -36,7 +59,7 @@ function titleFor(req: ReviewRequest): string | null {
   }
 }
 
-export const mockApi: ReviewApi = {
+export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise<ReviewModel> } = {
   async getConfig(): Promise<AppConfig> {
     await delay(80);
     return { version: '0.1.0-mock', defaultRepoPath: 'C:/work/shop', githubTokenConfigured: false };
@@ -59,16 +82,49 @@ export const mockApi: ReviewApi = {
   },
   async createReview(req: ReviewRequest, signal?: AbortSignal): Promise<ReviewModel> {
     await delay(2600, signal);
+    return mockApi.createReviewNow(req);
+  },
+  async createReviewNow(req: ReviewRequest): Promise<ReviewModel> {
     const { sampleReview } = await sample();
+    deleted.delete(sampleReview.id);
     const title = titleFor(req);
     const model: ReviewModel = title ? { ...sampleReview, source: { ...sampleReview.source, title } } : sampleReview;
     if (!created.some((r) => r.id === model.id)) created.push(model);
     return model;
   },
+  async createJob(req: ReviewRequest, signal?: AbortSignal): Promise<ReviewJob> {
+    await delay(60, signal);
+    if (req.kind === 'git' && req.base.trim() === 'yok') {
+      throw new ApiRequestError(`Ref bulunamadı: ${req.base}`, { kind: 'http', status: 400, endpoint: 'mock:/api/jobs', field: 'base', fromServerBody: true });
+    }
+    jobSeq += 1;
+    const job: MockJob = { id: `job-${jobSeq}`, started: Date.now(), startedAt: new Date().toISOString(), req };
+    jobs.set(job.id, job);
+    return mockApi.getJob(job.id, signal);
+  },
+  async getJob(id: string, signal?: AbortSignal): Promise<ReviewJob> {
+    await delay(40, signal);
+    const job = jobs.get(id);
+    if (!job) throw new ApiRequestError(`İş bulunamadı: ${id}`, { kind: 'http', status: 404, endpoint: `mock:/api/jobs/${id}`, fromServerBody: true });
+    const elapsed = Date.now() - job.started;
+    const progress = JOB_TIMELINE.filter((p) => p.at <= elapsed).map((p) => ({ at: new Date(job.started + p.at).toISOString(), message: p.message }));
+    if (elapsed < JOB_DURATION_MS) return { id, status: 'running', startedAt: job.startedAt, progress };
+    if (!job.reviewId) {
+      const model = await mockApi.createReviewNow(job.req);
+      job.reviewId = model.id;
+    }
+    return { id, status: 'done', startedAt: job.startedAt, progress, reviewId: job.reviewId };
+  },
+  async deleteReview(id: string): Promise<void> {
+    await delay(60);
+    deleted.add(id);
+    const i = created.findIndex((r) => r.id === id);
+    if (i >= 0) created.splice(i, 1);
+  },
   async listReviews(): Promise<ReviewListItem[]> {
     await delay(60);
     const { sampleReview } = await sample();
-    return [sampleReview].map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length }));
+    return [sampleReview].filter((r) => !deleted.has(r.id)).map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length }));
   },
   async getReview(id: string): Promise<ReviewModel> {
     await delay(120);

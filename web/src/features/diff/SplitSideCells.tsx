@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { SplitSide } from '../../lib/diffPresentation';
 import { lineHtml } from '../../lib/diffPresentation';
 import type { HlLang } from '../../lib/highlight';
@@ -12,7 +13,7 @@ interface SplitSideCellsProps {
 }
 
 /** Yan yana diff'in bir tarafı: satır no + kod hücresi. */
-export function SplitSideCells({ side, which, lang, oldHl, newHl }: SplitSideCellsProps) {
+function SplitSideCellsInner({ side, which, lang, oldHl, newHl }: SplitSideCellsProps) {
   if (!side) {
     return (
       <>
@@ -34,3 +35,5 @@ export function SplitSideCells({ side, which, lang, oldHl, newHl }: SplitSideCel
     </>
   );
 }
+
+export const SplitSideCells = memo(SplitSideCellsInner);

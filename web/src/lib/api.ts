@@ -1,9 +1,9 @@
-import type { ApiError, AppConfig, GitRefs, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
+import type { ApiError, AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 import { mockApi } from './mockApi';
 
-export { ApiRequestError, isApiError } from './apiTypes';
+export { ApiRequestError, isApiError, isMissingEndpoint } from './apiTypes';
 export type { ReviewApi, FileSide, FileContentResponse } from './apiTypes';
 
 function isApiErrorBody(value: unknown): value is ApiError {
@@ -39,7 +39,7 @@ async function request<T>(endpoint: string, init?: RequestInit): Promise<T> {
       }
     }
     if (isApiErrorBody(body)) {
-      throw new ApiRequestError(body.error, { kind: 'http', endpoint, status: res.status, detail: body.detail });
+      throw new ApiRequestError(body.error, { kind: 'http', endpoint, status: res.status, detail: body.detail, field: body.field, fromServerBody: true });
     }
     if (UNREACHABLE_STATUSES.has(res.status) || (res.status === 500 && !isJson)) {
       throw new ApiRequestError('Reviewist sunucusuna ulaşılamadı.', { kind: 'unreachable', endpoint, status: res.status });
@@ -61,6 +61,12 @@ export const realApi: ReviewApi = {
   getRefs: (repoPath) => request<GitRefs>(`/api/git/refs?repoPath=${encodeURIComponent(repoPath)}`),
   createReview: (req: ReviewRequest, signal?: AbortSignal) =>
     request<ReviewModel>('/api/reviews', { method: 'POST', body: JSON.stringify(req), signal }),
+  createJob: (req: ReviewRequest, signal?: AbortSignal) =>
+    request<ReviewJob>('/api/jobs', { method: 'POST', body: JSON.stringify(req), signal }),
+  getJob: (id: string, signal?: AbortSignal) => request<ReviewJob>(`/api/jobs/${encodeURIComponent(id)}`, { signal }),
+  deleteReview: async (id: string) => {
+    await request<{ ok: true }>(`/api/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
   listReviews: () => request<ReviewListItem[]>('/api/reviews'),
   getReview: (id) => request<ReviewModel>(`/api/reviews/${encodeURIComponent(id)}`),
   getFile: (id: string, path: string, side: FileSide) =>
@@ -75,6 +81,7 @@ export function getApi(mock: boolean): ReviewApi {
 export function errorHint(error: ApiRequestError): string {
   if (error.kind === 'unreachable') return 'Sunucuyu `npm run dev:server` (veya `npx reviewist`) ile başlatın; ya da örnek veriyle devam edin.';
   if (error.kind === 'aborted') return 'Analizi yeniden başlatabilirsiniz.';
+  if (error.kind === 'analysis') return error.field ? 'İlgili form alanını düzeltip tekrar deneyin.' : 'Analiz sunucuda tamamlanamadı. Ayrıntı aşağıda ve sunucu günlüğünde.';
   if (error.status === 400 || error.status === 422) return 'Formdaki alanları kontrol edin: repo yolu, ref adları veya URL geçerli olmalı.';
   if (error.status === 401 || error.status === 403) return 'Erişim reddedildi: GitHub token\'ının bu depoya okuma izni olduğundan emin olun.';
   if (error.status === 404) return 'İstenen kayıt bulunamadı: repo yolu, ref ya da review kimliği yanlış olabilir.';

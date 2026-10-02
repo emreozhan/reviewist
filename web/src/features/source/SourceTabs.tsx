@@ -5,6 +5,7 @@ import { GithubForm } from './GithubForm';
 import { GitSourceForm } from './GitSourceForm';
 import { PatchForm } from './PatchForm';
 import { WorktreeForm } from './WorktreeForm';
+import type { ServerFieldError } from './serverFieldError';
 
 type SourceTab = 'git' | 'worktree' | 'github' | 'patch';
 
@@ -19,10 +20,13 @@ interface SourceTabsProps {
   config?: AppConfig;
   pending: boolean;
   onSubmit: (req: ReviewRequest) => void;
+  serverError?: ServerFieldError;
+  /** Formda bir alan değişince (sunucu hatasını temizlemek için). */
+  onEdit?: () => void;
 }
 
 /** Kaynak seçimi sekmeleri (ARIA tablist; ok tuşlarıyla gezilir). */
-export function SourceTabs({ config, pending, onSubmit }: SourceTabsProps) {
+export function SourceTabs({ config, pending, onSubmit, serverError, onEdit }: SourceTabsProps) {
   const [tab, setTab] = useState<SourceTab>('git');
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -34,7 +38,7 @@ export function SourceTabs({ config, pending, onSubmit }: SourceTabsProps) {
     document.getElementById(`src-tab-${next.id}`)?.focus();
   };
 
-  const props = { config, pending, onSubmit };
+  const props = { config, pending, onSubmit, serverError, onEdit };
   return (
     <div className="source-card">
       <div className="source-tabs" role="tablist" aria-label="Kaynak türü" onKeyDown={onKey}>

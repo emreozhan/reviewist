@@ -306,3 +306,9 @@
 .hl .hljs-bullet {
   color: var(--hl-type);
 }
+
+/* Pencerelemede çizilmeyen satırların yer tutucusu. */
+.dt__pad td {
+  padding: 0;
+  border: 0;
+}

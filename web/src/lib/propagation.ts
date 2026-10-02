@@ -1,6 +1,7 @@
 import type { CallRef, ImpactNodeStatus } from '../../../src/shared/types';
 import type { ReviewIndex } from './reviewIndex';
-import { symbolLabel, symbolLocation } from './reviewIndex';
+import { locateSymbol } from './locate';
+import { symbolLabel } from './reviewIndex';
 
 export interface PropItem {
   key: string;
@@ -14,8 +15,10 @@ export interface PropItem {
   inChangedCode?: boolean;
   confidence?: CallRef['confidence'];
   status?: ImpactNodeStatus;
-  /** Satır bilinmiyorsa önizlemede aranacak bildirim kalıbı. */
-  search?: string;
+  /** Önizlemede okunacak taraf (silinmiş sembol için 'old'). */
+  side?: 'old' | 'new';
+  /** Dosya yolu paket adından tahmin edildi (sunucu konum vermedi). */
+  guessed?: boolean;
 }
 
 export type PropSectionId = 'overrides' | 'overriddenBy' | 'inheritors' | 'superTypes' | 'subTypes' | 'callersIn' | 'callersOut' | 'callees';
@@ -29,34 +32,20 @@ export interface PropSection {
   outside: boolean;
 }
 
-function simpleName(id: string): string {
-  const hash = id.indexOf('#');
-  if (hash >= 0) {
-    const m = id.slice(hash + 1);
-    const p = m.indexOf('(');
-    return p >= 0 ? m.slice(0, p) : m;
-  }
-  return id.slice(id.lastIndexOf('.') + 1);
-}
-
-export function searchHint(id: string): string {
-  return id.includes('#') ? `${simpleName(id)}(` : simpleName(id);
-}
-
 function symbolItem(index: ReviewIndex, id: string, keyPrefix: string): PropItem {
-  const loc = symbolLocation(index, id);
+  const loc = locateSymbol(index, id);
   const m = index.memberById.get(id);
   const t = index.typeById.get(id);
-  const range = m?.newRange ?? m?.oldRange ?? t?.newRange ?? t?.oldRange;
   return {
     key: `${keyPrefix}:${id}`,
     id,
     label: symbolLabel(index, id),
     file: loc.file,
-    line: range?.startLine,
+    line: loc.line,
+    side: loc.side,
+    guessed: loc.guessed,
     inDiff: loc.inDiff,
     status: m?.status ?? t?.status ?? index.nodeById.get(id)?.status,
-    search: searchHint(id),
   };
 }
 

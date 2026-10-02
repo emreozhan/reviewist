@@ -1,5 +1,7 @@
 import type { ImpactEdge, ImpactGraph, ImpactNode, Layer, TypeChange } from '../../../src/shared/types';
+import { findDeclarationLine } from '../lib/locate';
 import { S, T } from './ids';
+import { sampleFiles } from './sampleFiles';
 import { PATHS as P } from './samplePaths';
 
 interface External {
@@ -29,6 +31,17 @@ const EXTERNAL: External[] = [
   { id: T.MT, label: 'MoneyTest', kind: 'class', file: P.moneyTest, typeId: T.MT, layer: 'test', status: 'unchanged' },
 ];
 
+/**
+ * Sunucu diff dışı düğümlere bildirim aralığı (range) verir; mock'ta içerikten hesaplanır.
+ * MoneyTest kasıtlı olarak aralıksız bırakılır (arayüzün içerikte arama yedeği için).
+ */
+function externalRange(e: External): Pick<ImpactNode, 'range' | 'rangeSide'> {
+  if (e.id === T.MT) return {};
+  const content = sampleFiles[e.file]?.new;
+  const start = content ? findDeclarationLine(content.split('\n'), e.id) : undefined;
+  return start ? { range: { startLine: start, endLine: start }, rangeSide: 'new' } : {};
+}
+
 export function buildGraph(types: TypeChange[]): ImpactGraph {
   const nodes = new Map<string, ImpactNode>();
   const edges = new Map<string, ImpactEdge>();
@@ -56,7 +69,7 @@ export function buildGraph(types: TypeChange[]): ImpactGraph {
     }
   }
   for (const e of EXTERNAL) {
-    nodes.set(e.id, { id: e.id, label: e.label, kind: e.kind, status: e.status ?? 'impacted', file: e.file, typeId: e.typeId, layer: e.layer, riskLevel: e.status ? 'low' : 'medium' });
+    nodes.set(e.id, { id: e.id, label: e.label, kind: e.kind, status: e.status ?? 'impacted', file: e.file, typeId: e.typeId, layer: e.layer, riskLevel: e.status ? 'low' : 'medium', ...externalRange(e) });
   }
 
   for (const t of types) {
