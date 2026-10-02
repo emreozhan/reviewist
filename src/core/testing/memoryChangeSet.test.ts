@@ -29,4 +29,10 @@ describe('createMemoryChangeSet', () => {
     expect(await cs.listFiles('new', '.java')).toEqual(['lib/Other.java']);
     expect(await cs.listFiles('new')).toContain('same.txt');
   });
+
+  it('stableKey verilmezse başlıktan üretir, verilirse korur', () => {
+    expect(createMemoryChangeSet({ old: {}, new: {} }).info.stableKey).toBe('memory:bellek içi değişiklik');
+    expect(createMemoryChangeSet({ old: {}, new: {}, info: { title: 'x...y' } }).info.stableKey).toBe('memory:x...y');
+    expect(createMemoryChangeSet({ old: {}, new: {}, info: { stableKey: 'k1' } }).info.stableKey).toBe('k1');
+  });
 });

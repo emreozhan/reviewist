@@ -1,6 +1,6 @@
 /**
  * Reviewist HTTP API (Hono). Uç noktalar `src/shared/types.ts` sonundaki listededir.
- * Güvenlik: yalnız loopback'e bağlanılır; Host başlığı (DNS rebinding) ve POST'ta Origin denetlenir.
+ * Güvenlik: yalnız loopback'e bağlanılır; Host başlığı (DNS rebinding) ve POST/DELETE'te Origin denetlenir.
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -14,15 +14,17 @@ import type {
   ApiError,
   AppConfig,
   ChangeSet,
+  ReviewJob,
   ReviewListItem,
   ReviewModel,
   ReviewRequest,
 } from '../shared/types.js';
 import { createChangeSet, parseReviewRequest, type CreateChangeSetOptions } from '../sources/index.js';
-import type { ManagedChangeSet } from '../sources/common.js';
+import { sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
 import { isSourceError, shortMessage, SourceError } from '../sources/errors.js';
 import { getGitRefs } from '../sources/git.js';
 import { DEFAULT_TOKEN_ENVS, resolveGithubToken } from '../sources/github.js';
+import { AnalysisQueue, JobManager, toApiError } from './jobs.js';
 
 /** `src/core/buildReview.ts` sözleşmesi (docs/CONTRACT.md). */
 export interface BuildReviewOptions {
@@ -48,31 +50,57 @@ export interface CreateAppOptions {
   tokenEnvNames?: readonly string[];
   /** Bellekte tutulacak en fazla review (LRU). Varsayılan 20. */
   maxReviews?: number;
+  /** Aynı anda en fazla kaç analiz (fazlası kuyrukta bekler). Varsayılan 2. */
+  maxConcurrentAnalyses?: number;
+  /** Biten işlerin tutulma süresi (ms). Varsayılan 10 dk. */
+  jobTtlMs?: number;
+  /** Test için saat (iş süresi dolumu). */
+  now?: () => number;
   /** POST Origin denetiminde ek izinli portlar (varsayılan: vite dev 5173). */
   devPorts?: number[];
-  onProgress?: (msg: string) => void;
+  /** Her ilerleme mesajı (iş kaynaklıysa jobId ile). */
+  onProgress?: (msg: string, jobId?: string) => void;
 }
 
 export interface ReviewistApp {
   app: Hono;
-  /** Doğrular, ChangeSet üretir, analiz eder ve depoya ekler (CLI ilk review için kullanır). */
+  /** Doğrular, ChangeSet üretir, analiz eder ve depoya ekler (senkron uç ve testler için). */
   createReview(body: unknown): Promise<ReviewModel>;
+  /** Doğrular (hatada SourceError fırlatır) ve analizi arka plan işi olarak başlatır. */
+  startJob(body: unknown): ReviewJob;
+  /** İş bitene kadar bekler; bilinmeyen işte undefined. */
+  waitForJob(id: string): Promise<ReviewJob | undefined>;
+  /** Depodaki review modeli (CLI özet için). */
+  getReview(id: string): ReviewModel | undefined;
   setInitialReviewId(id: string | undefined): void;
   /** Tüm ChangeSet'leri dispose eder; süreçler kapandığında çözülür. */
   dispose(): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
-// Review deposu (LRU)
+// Review deposu (LRU + aktif istek sayacı)
 // ---------------------------------------------------------------------------
 
 interface StoredReview {
   model: ReviewModel;
   cs: ManagedChangeSet;
+  /** ChangeSet'i kullanan süren istek sayısı (ör. file ucu). */
+  active: number;
+  /** Depodan çıkarıldı (LRU/DELETE); sayaç sıfırlanınca dispose edilir. */
+  retired: boolean;
+  disposed: boolean;
+}
+
+/** Süren bir isteğin ChangeSet kullanım hakkı; iş bitince `release()` çağrılmalı. */
+export interface ReviewLease {
+  model: ReviewModel;
+  cs: ManagedChangeSet;
+  release(): void;
 }
 
 export class ReviewStore {
   private readonly map = new Map<string, StoredReview>();
+  private readonly pending = new Set<Promise<void>>();
 
   constructor(private readonly max: number) {}
 
@@ -80,15 +108,15 @@ export class ReviewStore {
     const old = this.map.get(model.id);
     if (old) {
       this.map.delete(model.id);
-      if (old.cs !== cs) void safeDispose(old.cs);
+      if (old.cs !== cs) this.retire(old);
     }
-    this.map.set(model.id, { model, cs });
+    this.map.set(model.id, { model, cs, active: 0, retired: false, disposed: false });
     while (this.map.size > this.max) {
       const oldestKey = this.map.keys().next().value;
       if (oldestKey === undefined) break;
       const e = this.map.get(oldestKey);
       this.map.delete(oldestKey);
-      if (e) void safeDispose(e.cs);
+      if (e) this.retire(e);
     }
   }
 
@@ -98,6 +126,36 @@ export class ReviewStore {
     this.map.delete(id);
     this.map.set(id, e);
     return e;
+  }
+
+  /**
+   * Review'u ChangeSet kullanımı için kiralar: kira sürerken review LRU'dan düşse ya da silinse bile
+   * ChangeSet dispose edilmez; son kira bırakılınca edilir.
+   */
+  acquire(id: string): ReviewLease | undefined {
+    const e = this.get(id);
+    if (!e) return undefined;
+    e.active++;
+    let released = false;
+    return {
+      model: e.model,
+      cs: e.cs,
+      release: () => {
+        if (released) return;
+        released = true;
+        e.active--;
+        if (e.retired && e.active === 0) this.disposeEntry(e);
+      },
+    };
+  }
+
+  /** Review'u kaldırır (DELETE). Kullanımdaysa dispose son kira bırakılınca yapılır. */
+  remove(id: string): boolean {
+    const e = this.map.get(id);
+    if (!e) return false;
+    this.map.delete(id);
+    this.retire(e);
+    return true;
   }
 
   list(): ReviewListItem[] {
@@ -116,10 +174,25 @@ export class ReviewStore {
     return this.map.size;
   }
 
-  disposeAll(): Promise<void> {
-    const all = [...this.map.values()].map((e) => safeDispose(e.cs));
+  /** Kapanış: kira durumuna bakılmaksızın hepsini dispose eder ve bekleyen dispose'ları bekler. */
+  async disposeAll(): Promise<void> {
+    const all = [...this.map.values()];
     this.map.clear();
-    return Promise.all(all).then(() => undefined);
+    for (const e of all) this.disposeEntry(e);
+    await Promise.all([...this.pending]);
+  }
+
+  private retire(e: StoredReview): void {
+    e.retired = true;
+    if (e.active === 0) this.disposeEntry(e);
+  }
+
+  private disposeEntry(e: StoredReview): void {
+    if (e.disposed) return;
+    e.disposed = true;
+    const p = safeDispose(e.cs);
+    this.pending.add(p);
+    void p.finally(() => this.pending.delete(p));
   }
 }
 
@@ -168,8 +241,10 @@ export function isAllowedOrigin(origin: string, host: string, devPorts: number[]
   return devPorts.some((p) => String(p) === o.port);
 }
 
-function apiError(c: Context, status: number, error: string, detail?: string): Response {
-  const body: ApiError = detail ? { error, detail } : { error };
+function apiError(c: Context, status: number, error: string, detail?: string, field?: string): Response {
+  const body: ApiError = { error };
+  if (detail) body.detail = detail;
+  if (field) body.field = field;
   return c.json(body, status as ContentfulStatusCode);
 }
 
@@ -212,6 +287,7 @@ async function loadDefaultBuildReview(): Promise<BuildReviewFn> {
 // ---------------------------------------------------------------------------
 
 const MAX_BODY_BYTES = 60 * 1024 * 1024;
+const REVIEW_NOT_FOUND = 'Review bulunamadı. Sunucu yeniden başlatılmış ya da review bellekten düşmüş olabilir.';
 
 function newReviewId(): string {
   return `r-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
@@ -230,31 +306,69 @@ function absolutizePaths(req: ReviewRequest, baseDir: string): ReviewRequest {
   }
 }
 
+/** JSON gövdeyi okur; geçersizse 400 SourceError. */
+async function readJsonBody(c: Context): Promise<unknown> {
+  try {
+    return (await c.req.json()) as unknown;
+  } catch {
+    throw new SourceError('İstek gövdesi geçerli JSON değil.', { status: 400, code: 'VALIDATION' });
+  }
+}
+
+const jsonBodyLimit = bodyLimit({
+  maxSize: MAX_BODY_BYTES,
+  onError: (c) => apiError(c, 413, 'İstek gövdesi çok büyük (en fazla 60 MB).'),
+});
+
 export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   const app = new Hono();
   const store = new ReviewStore(opts.maxReviews ?? 20);
+  const queue = new AnalysisQueue(Math.max(1, opts.maxConcurrentAnalyses ?? 2));
+  const jobs = new JobManager({ ttlMs: opts.jobTtlMs, now: opts.now, onProgress: opts.onProgress });
   const tokenEnvNames = opts.tokenEnvNames ?? DEFAULT_TOKEN_ENVS;
   const devPorts = opts.devPorts ?? [5173];
   const makeChangeSet: CreateChangeSetFn = opts.createChangeSet ?? createChangeSet;
-  const progress = opts.onProgress ?? (() => undefined);
   let initialReviewId: string | undefined;
+  let closed = false;
+
+  const validate = (body: unknown): ReviewRequest =>
+    absolutizePaths(parseReviewRequest(body), opts.defaultRepoPath ?? process.cwd());
+
+  /** Doğrulanmış isteği kuyruk sınırı altında analiz eder ve depoya ekler. */
+  const analyze = async (req: ReviewRequest, progress: (msg: string) => void): Promise<ReviewModel> =>
+    await queue.run(
+      async () => {
+        const cs = await makeChangeSet(req, { tokenEnvNames, onProgress: progress });
+        let model: ReviewModel;
+        try {
+          const build = opts.buildReview ?? (await loadDefaultBuildReview());
+          progress('Analiz başlıyor');
+          model = await build(cs, { id: newReviewId(), onProgress: progress });
+        } catch (err) {
+          void safeDispose(cs);
+          throw err;
+        }
+        if (closed) {
+          void safeDispose(cs);
+          throw new SourceError('Sunucu kapanıyor; analiz sonucu saklanmadı.', { status: 503, code: 'ENGINE' });
+        }
+        // Kaynak uyarıları (analiz sırasında eklenenler dahil) modele eklenir.
+        const merged = [...cs.warnings, ...(model.warnings ?? [])];
+        model.warnings = [...new Set(merged)];
+        store.add(model, cs);
+        return model;
+      },
+      (position) => progress(`Kuyrukta bekleniyor (sıra: ${position}; aynı anda en fazla ${opts.maxConcurrentAnalyses ?? 2} analiz)`),
+    );
 
   const createReview = async (body: unknown): Promise<ReviewModel> => {
-    const req = absolutizePaths(parseReviewRequest(body), opts.defaultRepoPath ?? process.cwd());
-    const cs = await makeChangeSet(req, { tokenEnvNames, onProgress: progress });
-    let model: ReviewModel;
-    try {
-      const build = opts.buildReview ?? (await loadDefaultBuildReview());
-      model = await build(cs, { id: newReviewId(), onProgress: progress });
-    } catch (err) {
-      void safeDispose(cs);
-      throw err;
-    }
-    // Kaynak uyarıları (analiz sırasında eklenenler dahil) modele eklenir.
-    const merged = [...cs.warnings, ...(model.warnings ?? [])];
-    model.warnings = [...new Set(merged)];
-    store.add(model, cs);
-    return model;
+    const req = validate(body);
+    return await analyze(req, (msg) => opts.onProgress?.(msg));
+  };
+
+  const startJob = (body: unknown): ReviewJob => {
+    const req = validate(body); // senkron doğrulama: hata çağırana (400) gider
+    return jobs.start(async (progress) => (await analyze(req, progress)).id);
   };
 
   // --- güvenlik --------------------------------------------------------------
@@ -287,44 +401,56 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   app.get('/api/git/refs', async (c) => {
     const q = c.req.query('repoPath')?.trim();
     const repoPath = q ? resolve(opts.defaultRepoPath ?? process.cwd(), q) : opts.defaultRepoPath;
-    if (!repoPath) return apiError(c, 400, 'repoPath parametresi gerekli (sunucu bir depo içinde başlatılmadı).');
+    if (!repoPath) {
+      return apiError(c, 400, 'repoPath parametresi gerekli (sunucu bir depo içinde başlatılmadı).', undefined, 'repoPath');
+    }
     return c.json(await getGitRefs(repoPath));
   });
 
-  app.post(
-    '/api/reviews',
-    bodyLimit({
-      maxSize: MAX_BODY_BYTES,
-      onError: (c) => apiError(c, 413, 'İstek gövdesi çok büyük (en fazla 60 MB).'),
-    }),
-    async (c) => {
-      let body: unknown;
-      try {
-        body = await c.req.json();
-      } catch {
-        return apiError(c, 400, 'İstek gövdesi geçerli JSON değil.');
-      }
-      return c.json(await createReview(body));
-    },
-  );
+  // Senkron (geri uyumluluk): analiz bitince ReviewModel döner.
+  app.post('/api/reviews', jsonBodyLimit, async (c) => c.json(await createReview(await readJsonBody(c))));
+
+  // Arka plan işi: doğrulama hatası senkron 400, aksi halde 202 + ReviewJob.
+  app.post('/api/jobs', jsonBodyLimit, async (c) => c.json(startJob(await readJsonBody(c)), 202));
+
+  app.get('/api/jobs/:id', (c) => {
+    const job = jobs.get(c.req.param('id'));
+    if (!job) return apiError(c, 404, 'İş bulunamadı. Biten işler 10 dakika sonra silinir ya da sunucu yeniden başlatılmış olabilir.');
+    return c.json(job);
+  });
 
   app.get('/api/reviews', (c) => c.json(store.list()));
 
   app.get('/api/reviews/:id', (c) => {
     const e = store.get(c.req.param('id'));
-    if (!e) return apiError(c, 404, 'Review bulunamadı. Sunucu yeniden başlatılmış ya da review bellekten düşmüş olabilir.');
+    if (!e) return apiError(c, 404, REVIEW_NOT_FOUND);
     return c.json(e.model);
   });
 
+  app.delete('/api/reviews/:id', (c) => {
+    const id = c.req.param('id');
+    if (!store.remove(id)) return apiError(c, 404, REVIEW_NOT_FOUND);
+    if (initialReviewId === id) initialReviewId = undefined;
+    return c.json({ ok: true as const });
+  });
+
   app.get('/api/reviews/:id/file', async (c) => {
-    const e = store.get(c.req.param('id'));
-    if (!e) return apiError(c, 404, 'Review bulunamadı. Sunucu yeniden başlatılmış ya da review bellekten düşmüş olabilir.');
     const side = c.req.query('side') ?? 'new';
-    if (side !== 'old' && side !== 'new') return apiError(c, 400, "side parametresi 'old' ya da 'new' olmalı.");
-    const path = c.req.query('path');
-    if (!path) return apiError(c, 400, 'path parametresi gerekli.');
-    const content = await e.cs.readFile(side, path);
-    return c.json({ path, side, content: content ?? null });
+    if (side !== 'old' && side !== 'new') return apiError(c, 400, "side parametresi 'old' ya da 'new' olmalı.", undefined, 'side');
+    const rawPath = c.req.query('path');
+    if (!rawPath) return apiError(c, 400, 'path parametresi gerekli.', undefined, 'path');
+    const path = sanitizeRepoRelPath(rawPath);
+    if (path === undefined) {
+      return apiError(c, 400, "Geçersiz dosya yolu: depo köküne göre göreli olmalı; '..' ve mutlak yol kullanılamaz.", undefined, 'path');
+    }
+    const lease = store.acquire(c.req.param('id'));
+    if (!lease) return apiError(c, 404, REVIEW_NOT_FOUND);
+    try {
+      const content = await lease.cs.readFile(side, path);
+      return c.json({ path, side, content: content ?? null });
+    } finally {
+      lease.release();
+    }
   });
 
   app.all('/api/*', (c) => apiError(c, 404, 'API uç noktası bulunamadı.', `${c.req.method} ${c.req.path}`));
@@ -340,18 +466,22 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   app.notFound((c) => apiError(c, 404, 'Bulunamadı.', c.req.path));
 
   app.onError((err, c) => {
-    if (isSourceError(err)) return apiError(c, err.status, err.message, err.detail);
-    console.error(`[reviewist] ${c.req.method} ${c.req.path}: ${shortMessage(err, 300)}`);
-    return apiError(c, 500, 'Beklenmeyen sunucu hatası.', shortMessage(err, 300));
+    const { status, body } = toApiError(err);
+    if (!isSourceError(err)) console.error(`[reviewist] ${c.req.method} ${c.req.path}: ${shortMessage(err, 300)}`);
+    return c.json(body, status as ContentfulStatusCode);
   });
 
   return {
     app,
     createReview,
+    startJob,
+    waitForJob: (id) => jobs.wait(id),
+    getReview: (id) => store.get(id)?.model,
     setInitialReviewId(id) {
       initialReviewId = id;
     },
     dispose() {
+      closed = true;
       return store.disposeAll();
     },
   };

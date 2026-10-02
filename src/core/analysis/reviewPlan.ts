@@ -11,7 +11,7 @@
 import type { FileChange, Layer, ReviewStep, RiskLevel } from '../../shared/types.js';
 import type { TypeDiff } from '../java/model.js';
 import { isBreakingSignature, isSemanticChange } from './risk.js';
-import { basename, RISK_LEVEL_ORDER, symbolLabel } from './util.js';
+import { basename, BinaryHeap, RISK_LEVEL_ORDER, symbolLabel } from './util.js';
 
 const LEVEL_TR: Record<RiskLevel, string> = { low: 'düşük', medium: 'orta', high: 'yüksek', critical: 'kritik' };
 const ADAPTER_LAYERS = new Set<Layer>(['adapter-in', 'adapter-out', 'controller', 'repository']);
@@ -53,6 +53,47 @@ function categorize(file: FileChange, tds: readonly TypeDiff[]): Category {
   if (ADAPTER_LAYERS.has(file.layer)) return '3';
   if (file.layer === 'config' || file.layer === 'build' || file.layer === 'resource') return '4';
   return '2';
+}
+
+function prioCompare(a: Node, b: Node): number {
+  return CAT_ORDER[a.cat] - CAT_ORDER[b.cat] || b.file.risk.score - a.file.risk.score || a.file.path.localeCompare(b.file.path);
+}
+
+/** Üretim düğümlerinin okuma sırası (0 tabanlı rank). Bağımlılıklar yalnızca `prod` içindekiler sayılır. */
+function topoRank(prod: readonly Node[]): Map<string, number> {
+  const inProd = new Set(prod.map((n) => n.file.path));
+  const byPath = new Map(prod.map((n) => [n.file.path, n]));
+  const indeg = new Map<string, number>();
+  for (const n of prod) {
+    let d = 0;
+    for (const dep of n.deps) if (inProd.has(dep)) d++;
+    indeg.set(n.file.path, d);
+  }
+  const less = (a: Node, b: Node) => prioCompare(a, b) < 0;
+  const ready = new BinaryHeap<Node>(less);
+  const all = new BinaryHeap<Node>(less); // döngü kırmak için: kalanların en öncelikli olanı (tembel silme)
+  for (const n of prod) {
+    all.push(n);
+    if (indeg.get(n.file.path) === 0) ready.push(n);
+  }
+  const rank = new Map<string, number>();
+  while (rank.size < prod.length) {
+    let pick = ready.pop();
+    while (pick && rank.has(pick.file.path)) pick = ready.pop();
+    if (!pick) {
+      pick = all.pop();
+      while (pick && rank.has(pick.file.path)) pick = all.pop();
+      if (!pick) break;
+    }
+    rank.set(pick.file.path, rank.size);
+    for (const dep of pick.dependents) {
+      const d = indeg.get(dep);
+      if (d === undefined || rank.has(dep)) continue;
+      indeg.set(dep, d - 1);
+      if (d - 1 === 0) ready.push(byPath.get(dep) as Node);
+    }
+  }
+  return rank;
 }
 
 /** Değişen üyelerin durum özetini üretir: '2 üye imzası değişti, 1 üye eklendi'. */
@@ -128,18 +169,10 @@ export function buildReviewPlan(files: readonly FileChange[], typeDiffsByFile: R
     }
   }
 
-  // Kahn: hazır düğümlerden (kategori, risk) önceliğiyle; döngüde en öncelikli kalan zorla seçilir.
+  // Kahn (öncelik kuyruklu): hazır düğümlerden (kategori, risk, yol) önceliğiyle; döngüde en öncelikli kalan zorla seçilir.
+  // İkili yığınla O((V + E) log V).
   const prod = [...nodes.values()].filter((n) => n.cat !== '6' && n.cat !== 'test');
-  const prio = (a: Node, b: Node) => CAT_ORDER[a.cat] - CAT_ORDER[b.cat] || b.file.risk.score - a.file.risk.score || a.file.path.localeCompare(b.file.path);
-  const remaining = new Map(prod.map((n) => [n.file.path, new Set([...n.deps].filter((d) => nodes.get(d)?.cat !== '6'))]));
-  const rank = new Map<string, number>();
-  while (remaining.size) {
-    const ready = [...remaining.entries()].filter(([, d]) => d.size === 0).map(([p]) => nodes.get(p) as Node);
-    const pick = (ready.length ? ready : [...remaining.keys()].map((p) => nodes.get(p) as Node)).sort(prio)[0];
-    rank.set(pick.file.path, rank.size);
-    remaining.delete(pick.file.path);
-    for (const d of remaining.values()) d.delete(pick.file.path);
-  }
+  const rank = topoRank(prod);
   prod.sort((a, b) => CAT_ORDER[a.cat] - CAT_ORDER[b.cat] || (rank.get(a.file.path) ?? 0) - (rank.get(b.file.path) ?? 0));
 
   const steps: ReviewStep[] = [];
@@ -151,10 +184,18 @@ export function buildReviewPlan(files: readonly FileChange[], typeDiffsByFile: R
   const tests = [...nodes.values()].filter((n) => n.cat === 'test');
   const subjectOf = attachTests(tests, prod);
 
+  const testsBySubject = new Map<string, Node[]>();
+  for (const t of tests) {
+    const subj = subjectOf.get(t.file.path);
+    if (subj === undefined) continue;
+    const list = testsBySubject.get(subj);
+    if (list) list.push(t);
+    else testsBySubject.set(subj, [t]);
+  }
   for (const n of prod) {
     push(n.file.path, memberSymbolIds(n.tds), reasonFor(n, placed));
-    for (const t of tests) {
-      if (placed.has(t.file.path) || subjectOf.get(t.file.path) !== n.file.path) continue;
+    for (const t of testsBySubject.get(n.file.path) ?? []) {
+      if (placed.has(t.file.path)) continue;
       const prodName = basename(n.file.path).replace(/\.\w+$/, '');
       push(t.file.path, memberSymbolIds(t.tds), `Test: ${prodName} değişikliklerini doğrulayan test (${changeSummary(t.tds, t.file)})`);
     }
@@ -181,6 +222,9 @@ const TEST_STEM_RE = /^(?:Test(?=[A-Z]))?(\w+?)(?:Test|Tests|IT|ITCase|Integrati
 function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string, string> {
   const byStem = new Map<string, string>();
   for (const n of prod) byStem.set(basename(n.file.path).replace(/\.\w+$/, ''), n.file.path);
+  // test yolu → onu ilişkili sayan üretim dosyalarından plandaki en sonuncusu
+  const lastRelated = new Map<string, string>();
+  for (const n of prod) for (const tp of n.file.relatedTestFiles) lastRelated.set(tp, n.file.path);
   const out = new Map<string, string>();
   for (const t of tests) {
     const stem = basename(t.file.path).replace(/\.\w+$/, '');
@@ -190,8 +234,8 @@ function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string,
       out.set(t.file.path, byName);
       continue;
     }
-    const related = prod.filter((n) => n.file.relatedTestFiles.includes(t.file.path));
-    if (related.length) out.set(t.file.path, related[related.length - 1].file.path);
+    const related = lastRelated.get(t.file.path);
+    if (related !== undefined) out.set(t.file.path, related);
   }
   return out;
 }

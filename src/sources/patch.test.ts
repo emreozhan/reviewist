@@ -102,4 +102,60 @@ describe('createPatchChangeSet', () => {
     expect(empty.files).toEqual([]);
     expect(empty.warnings[0]).toContain('bulunamadı');
   });
+
+  it('repoPath olmadan: eklenen dosyanın yeni, silinen dosyanın eski içeriği hunk\'lardan kurulur', async () => {
+    const text = [
+      'diff --git a/src/Ek.java b/src/Ek.java',
+      'new file mode 100644',
+      '--- /dev/null',
+      '+++ b/src/Ek.java',
+      '@@ -0,0 +1,3 @@',
+      '+class Ek {',
+      '+  int a;',
+      '+}',
+      'diff --git a/src/Gone.java b/src/Gone.java',
+      'deleted file mode 100644',
+      '--- a/src/Gone.java',
+      '+++ /dev/null',
+      '@@ -1,2 +0,0 @@',
+      '-class Gone {',
+      '-}',
+      '\\ No newline at end of file',
+      'diff --git a/src/Mod.java b/src/Mod.java',
+      '--- a/src/Mod.java',
+      '+++ b/src/Mod.java',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b',
+      '',
+    ].join('\n');
+    const progress: string[] = [];
+    const cs = await createPatchChangeSet({ text, onProgress: (m) => progress.push(m) });
+    expect(progress).toEqual(['Yama ayrıştırılıyor', 'Yama ayrıştırıldı: 3 dosya']);
+    expect(await cs.readFile('new', 'src/Ek.java')).toBe('class Ek {\n  int a;\n}\n');
+    expect(await cs.readFile('old', 'src/Ek.java')).toBeUndefined();
+    expect(await cs.readFile('old', 'src/Gone.java')).toBe('class Gone {\n}');
+    expect(await cs.readFile('new', 'src/Gone.java')).toBeUndefined();
+    // Değişen dosyanın tam içeriği yamadan bilinemez
+    expect(await cs.readFile('new', 'src/Mod.java')).toBeUndefined();
+    expect(await cs.readFile('old', 'src/Mod.java')).toBeUndefined();
+    expect(await cs.readFile('new', '../src/Ek.java')).toBeUndefined();
+  });
+
+  it('kesilmiş ekleme yaması (satır sayısı uyuşmaz) içerik üretmez', async () => {
+    const text = ['--- /dev/null', '+++ b/A.txt', '@@ -0,0 +1,5 @@', '+a', '+b', ''].join('\n');
+    const cs = await createPatchChangeSet({ text });
+    expect(cs.files[0]?.status).toBe('added');
+    expect(await cs.readFile('new', 'A.txt')).toBeUndefined();
+  });
+
+  it('stableKey: metnin sha1 ilk 12 hanesi; CRLF/LF farkı anahtarı değiştirmez', async () => {
+    const lf = ['--- a/A.txt', '+++ b/A.txt', '@@ -1 +1 @@', '-a', '+b', ''].join('\n');
+    const a = await createPatchChangeSet({ text: lf });
+    const b = await createPatchChangeSet({ text: lf.replace(/\n/g, '\r\n') });
+    const c = await createPatchChangeSet({ text: lf.replace('+b', '+c') });
+    expect(a.info.stableKey).toMatch(/^patch:[0-9a-f]{12}$/);
+    expect(b.info.stableKey).toBe(a.info.stableKey);
+    expect(c.info.stableKey).not.toBe(a.info.stableKey);
+  });
 });

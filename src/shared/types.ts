@@ -38,6 +38,8 @@ export interface ReviewSourceInfo {
   prNumber?: number;
   author?: string;
   description?: string; // PR gövdesi (markdown)
+  /** Aynı incelemenin tekrar analizlerinde değişmeyen anahtar (görüldü/not kalıcılığı için). */
+  stableKey: string;
 }
 
 export interface ChangeSetFile {
@@ -129,7 +131,8 @@ export type ChangeFlag =
   | 'formatting'
   | 'typeParams'
   | 'fieldType'
-  | 'initializer';
+  | 'initializer'
+  | 'supertypes'; // tip düzeyi: extends/implements değişti
 
 export interface CallRef {
   fromId: string; // çağıran sembolün id'si
@@ -219,6 +222,9 @@ export interface ImpactNode {
   typeId?: string;
   layer: Layer;
   riskLevel: RiskLevel;
+  /** Head tarafındaki bildirim aralığı (silinmişse eski taraf); diff dışı önizleme için. */
+  range?: Range;
+  rangeSide?: 'old' | 'new';
 }
 
 export interface ImpactEdge {
@@ -339,14 +345,31 @@ export interface AppConfig {
 export interface ApiError {
   error: string; // Türkçe mesaj
   detail?: string;
+  field?: string; // doğrulama hatasında ilgili istek alanı (ör. 'url', 'base')
+}
+
+export type ReviewJobStatus = 'running' | 'done' | 'error';
+
+export interface ReviewJob {
+  id: string;
+  status: ReviewJobStatus;
+  startedAt: string; // ISO
+  /** Sırayla ilerleme mesajları (Türkçe), ör. 'Repo indeksi: 1200/3400 dosya'. */
+  progress: { at: string; message: string }[];
+  reviewId?: string; // status 'done'
+  error?: ApiError; // status 'error'
 }
 
 /*
  * Uç noktalar (hepsi JSON):
  *   GET  /api/config                                   -> AppConfig
  *   GET  /api/git/refs?repoPath=...                    -> GitRefs
- *   POST /api/reviews            body: ReviewRequest   -> ReviewModel   (hata: 4xx/5xx ApiError)
+ *   POST /api/reviews            body: ReviewRequest   -> ReviewModel   (hata: 4xx/5xx ApiError)  [senkron]
+ *   POST /api/jobs               body: ReviewRequest   -> ReviewJob     (202; doğrulama hatası 400 ApiError)
+ *   GET  /api/jobs/:id                                 -> ReviewJob     (arayüz ~400 ms aralıkla sorgular)
+ *   DELETE /api/reviews/:id                            -> { ok: true }
  *   GET  /api/reviews                                  -> ReviewListItem[]
  *   GET  /api/reviews/:id                              -> ReviewModel
  *   GET  /api/reviews/:id/file?path=...&side=old|new   -> { path: string; side: 'old'|'new'; content: string | null }
+ *        (diff dışındaki repo dosyaları da: head/base ağacından okunur)
  */

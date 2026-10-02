@@ -7,12 +7,15 @@
  *  - extends/implements: değişen alt tip ↔ değişen üst tip
  *  - calls: yalnızca çağrılanın API'si değiştiyse (imza/ad/silme/taşıma/ekleme). Gövdesi değişen bir metodu çağıran,
  *    o değişiklik yüzünden değişmiş sayılmaz; aksi halde büyük diff'lerde her şey tek gruba çöker.
+ *  - taşıma: taşınan üye (status 'moved') ile eski sahibinin üyeleri arasındaki kenarlar (eski sahibin taşınan metodu
+ *    çağırması gibi) birleştirici sayılmaz; taşıma kendi hikâyesi olur ("validate PlaceOrderService → OrderValidator taşındı").
+ * Test sembolleri köprü olmaz; her test tipi ilgili tek bir üretim hikâyesine bağlanır ve grubun sonunda listelenir.
  * Tek elemanlı düşük/orta riskli bileşenler "Diğer küçük değişiklikler", kozmetikler "Biçimsel değişiklikler" grubunda toplanır.
  */
 import type { CallRef, ChangeGroup, FileChange, MemberChange, RiskInfo, RiskLevel } from '../../shared/types.js';
 import type { TypeDiff } from '../java/model.js';
 import { isBreakingSignature, isSemanticChange } from './risk.js';
-import { maxLevel, RISK_LEVEL_ORDER, symbolLabel } from './util.js';
+import { maxLevel, RISK_LEVEL_ORDER, simpleTypeName, symbolLabel } from './util.js';
 
 class UnionFind {
   private readonly parent = new Map<string, string>();
@@ -67,6 +70,14 @@ function compareRank(a: Sym, b: Sym): number {
   return a.id.localeCompare(b.id);
 }
 
+/** Taşınan üyenin eski sahibi (tip id'si); taşıma değilse undefined. */
+function movedFrom(mc: MemberChange | undefined): string | undefined {
+  if (mc?.status !== 'moved' || !mc.oldId) return undefined;
+  const i = mc.oldId.indexOf('#');
+  const owner = i >= 0 ? mc.oldId.slice(0, i) : undefined;
+  return owner && owner !== mc.ownerTypeId ? owner : undefined;
+}
+
 function verbOf(mc: MemberChange): string {
   if (mc.status === 'signatureChanged') return isBreakingSignature(mc) ? 'imza değişikliği' : 'anotasyon değişikliği';
   if (mc.status === 'removed') return 'kaldırıldı';
@@ -94,7 +105,12 @@ function groupTitle(anchor: Sym, symbols: Sym[], tdById: Map<string, TypeDiff>, 
   }
   const mc = anchor.mc;
   const owner = tdById.get(mc.ownerTypeId)?.change ?? anchor.td.change;
-  const label = mc.status === 'renamed' && mc.oldName ? `${owner.name}.${mc.oldName}` : symbolLabel(mc.id);
+  const from = movedFrom(mc);
+  let label = mc.status === 'renamed' && mc.oldName ? `${owner.name}.${mc.oldName}` : symbolLabel(mc.id);
+  if (from) {
+    const fromName = simpleTypeName(from);
+    label = fromName === owner.name ? `${mc.name} ${from} → ${owner.id}` : `${mc.name} ${fromName} → ${owner.name}`;
+  }
   const ownerIsContract = owner.kind === 'interface' || anchor.td.newType?.modifiers.includes('abstract') === true;
   const implCount = Math.max(mc.overriddenBy.length, ownerIsContract && mc.kind === 'method' ? owner.subTypes.length : 0);
   const callers = new Set(mc.callers.map((c) => c.fromId)).size;
@@ -150,8 +166,16 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
     else typeRep.set(s.typeId, s.id);
   }
   // Üretim kodu kenarları. Test sembolleri köprü olmaz: bir test birden çok hikâyeyi çağırsa da onları birleştirmemeli.
+  // Taşınan üye ile eski sahibinin üyeleri arasındaki kenar da birleştirmez (taşıma ayrı hikâye).
+  const isMoveEdge = (x: Sym | undefined, y: Sym | undefined) => {
+    const from = movedFrom(x?.mc);
+    return from !== undefined && y?.typeId === from;
+  };
   const prodEdge = (a: string, b: string) => {
-    if (syms.get(a)?.isTest || syms.get(b)?.isTest) return;
+    const sa = syms.get(a);
+    const sb = syms.get(b);
+    if (sa?.isTest || sb?.isTest) return;
+    if (isMoveEdge(sa, sb) || isMoveEdge(sb, sa)) return;
     uf.union(a, b);
   };
   for (const s of syms.values()) {
@@ -206,7 +230,8 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
   const groups: (ChangeGroup & { score: number })[] = [];
   const small: Sym[] = [];
   for (const symbols of comps.values()) {
-    symbols.sort((a, b) => b.risk.score - a.risk.score || a.id.localeCompare(b.id));
+    // Üretim sembolleri önce (riske göre), testler sonda.
+    symbols.sort((a, b) => Number(a.isTest) - Number(b.isTest) || b.risk.score - a.risk.score || a.id.localeCompare(b.id));
     const level = maxLevel(symbols.map((s) => s.risk.level));
     if (symbols.length === 1 && RISK_LEVEL_ORDER[level] < RISK_LEVEL_ORDER.high) {
       small.push(symbols[0]);
@@ -221,7 +246,7 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
       symbolIds: symbols.map((s) => s.id),
       fileIds,
       riskLevel: level,
-      score: symbols[0].risk.score,
+      score: Math.max(...symbols.map((s) => s.risk.score)),
     });
   }
   groups.sort((a, b) => RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || b.score - a.score || b.symbolIds.length - a.symbolIds.length || a.title.localeCompare(b.title));

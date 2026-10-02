@@ -1,9 +1,10 @@
 /**
  * Etki grafiği: değişen tipler + değişen üyeler + diff dışında etkilenenler (çağıranlar, override edenler, alt tipler;
  * status 'impacted'). Kenarlar: calls / overrides / extends / implements / contains / tests. Kenar id'leri kararlı:
- * `${kind}:${from}->${to}`. Düğüm sınırı aşılırsa riske göre kırpılır.
+ * `${kind}:${from}->${to}`. Düğüm sınırı aşılırsa riske göre kırpılır. Her düğüm bildirim aralığını (range/rangeSide) taşır:
+ * değişenlerde head (silinmişse eski) aralığı, diff dışı etkilenenlerde RepoIndex'teki (head) aralık.
  */
-import type { CallRef, FileChange, ImpactEdge, ImpactGraph, ImpactNode, Layer, RiskLevel, TypeKind } from '../../shared/types.js';
+import type { CallRef, FileChange, ImpactEdge, ImpactGraph, ImpactNode, Layer, Range, RiskLevel, TypeKind } from '../../shared/types.js';
 import type { RepoIndexApi, TypeDiff } from '../java/model.js';
 import { isSemanticChange } from './risk.js';
 import { maxLevel, RISK_LEVEL_ORDER, simpleTypeName, symbolLabel } from './util.js';
@@ -55,12 +56,23 @@ export function buildGraph(input: GraphInput): GraphResult {
       typeId: ch.id,
       layer: ch.layer,
       riskLevel: ch.risk.level,
+      ...rangeOf(ch.newRange, ch.oldRange),
     });
     score.set(ch.id, ch.risk.score + 0.5);
     for (const md of semMembers) {
       const mc = md.change;
       if (nodes.has(mc.id)) continue;
-      nodes.set(mc.id, { id: mc.id, label: symbolLabel(mc.id), kind: mc.kind, status: mc.status, file: ch.file, typeId: ch.id, layer: ch.layer, riskLevel: mc.risk.level });
+      nodes.set(mc.id, {
+        id: mc.id,
+        label: symbolLabel(mc.id),
+        kind: mc.kind,
+        status: mc.status,
+        file: ch.file,
+        typeId: ch.id,
+        layer: ch.layer,
+        riskLevel: mc.risk.level,
+        ...rangeOf(mc.newRange, mc.oldRange),
+      });
       score.set(mc.id, mc.risk.score);
       addEdge('contains', ch.id, mc.id);
     }
@@ -85,6 +97,7 @@ export function buildGraph(input: GraphInput): GraphResult {
           typeId: r?.type.fqn ?? id.slice(0, id.indexOf('#')),
           layer: input.layerOf(r?.file.path ?? fallback.file, r?.type.fqn),
           riskLevel: 'low',
+          ...rangeOf(r?.member.range, undefined),
         });
       } else {
         const t = input.index.getType(id);
@@ -98,6 +111,7 @@ export function buildGraph(input: GraphInput): GraphResult {
           typeId: id,
           layer: input.layerOf(f?.path ?? fallback.file, id),
           riskLevel: 'low',
+          ...rangeOf(t?.range, undefined),
         });
       }
     }
@@ -150,12 +164,14 @@ export function buildGraph(input: GraphInput): GraphResult {
     for (const t of f.relatedTestFiles) for (const testType of typesByFile.get(t) ?? []) for (const p of prodTypes) addEdge('tests', testType, p);
   }
 
-  // Etkilenen düğümlerin risk seviyesi: etkilendiği değişen sembollerin en yükseği
+  // Etkilenen düğümlerin risk seviyesi: etkilendiği değişen sembollerin en yükseği; test katmanındaysa bir kademe düşük
+  // (diff dışı bir testin kırılması üretim kodunun kırılmasından daha az zararlıdır).
   for (const [id, sources] of impactedBy) {
     const n = nodes.get(id);
     if (!n) continue;
     const levels: RiskLevel[] = [...sources].map((s) => nodes.get(s)?.riskLevel ?? 'low');
     n.riskLevel = maxLevel(levels);
+    if (n.layer === 'test') n.riskLevel = lowerLevel(n.riskLevel);
     score.set(id, Math.max(...[...sources].map((s) => score.get(s) ?? 0)) - 0.25);
   }
 
@@ -173,6 +189,19 @@ export function buildGraph(input: GraphInput): GraphResult {
   keptNodes.sort((a, b) => a.id.localeCompare(b.id));
   const keptEdges = [...edges.values()].filter((e) => keep.has(e.from) && keep.has(e.to)).sort((a, b) => a.id.localeCompare(b.id));
   return { graph: { nodes: keptNodes, edges: keptEdges }, impactedOutsideDiff, truncatedFrom };
+}
+
+const LEVELS: readonly RiskLevel[] = ['low', 'medium', 'high', 'critical'];
+
+function lowerLevel(level: RiskLevel): RiskLevel {
+  return LEVELS[Math.max(0, RISK_LEVEL_ORDER[level] - 1)];
+}
+
+/** Düğüm aralığı: head tarafı varsa o, yoksa (silinmiş) eski taraf. */
+function rangeOf(newRange: Range | undefined, oldRange: Range | undefined): Pick<ImpactNode, 'range' | 'rangeSide'> {
+  if (newRange) return { range: { startLine: newRange.startLine, endLine: newRange.endLine }, rangeSide: 'new' };
+  if (oldRange) return { range: { startLine: oldRange.startLine, endLine: oldRange.endLine }, rangeSide: 'old' };
+  return {};
 }
 
 function inheritanceKind(sub: string, sup: string, tdById: Map<string, TypeDiff>, input: GraphInput): 'extends' | 'implements' {

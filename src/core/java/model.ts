@@ -36,6 +36,11 @@ export interface CallSite {
   line: number; // 1 tabanlı
   isConstructor: boolean; // new X(...) ise true, name = 'X'
   isMethodRef: boolean; // Type::method ise true (argCount = -1)
+  /**
+   * Argüman ifadelerinin boşlukları tek boşluğa indirilmiş ham metni (en fazla 80 karakter, uzunsa kırpılır).
+   * Metot referansında yok. Tip çıkarımı (literal, yerel değişken) için; eski çağrı/yeni imza uyuşmazlığı tespitinde kullanılır.
+   */
+  args?: string[];
 }
 
 export interface CodeFeatures {

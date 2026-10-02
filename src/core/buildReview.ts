@@ -23,15 +23,19 @@ import { buildReviewPlan } from './analysis/reviewPlan.js';
 import { isBreakingSignature, isSemanticChange } from './analysis/risk.js';
 import { assignLayers, scoreAll } from './analysis/scoring.js';
 import { TestLocator, testFindings } from './analysis/testMapping.js';
-import { changedLineSets, emptyRisk, errorMessage, mapLimit } from './analysis/util.js';
+import { changedLineSets, emptyRisk, errorMessage, mapLimit, progressCounter } from './analysis/util.js';
 
 export interface BuildReviewOptions {
   id?: string; // verilmezse üretilir
   maxIndexFiles?: number; // repo indeksi için en fazla .java dosyası (varsayılan 5000)
   onProgress?: (msg: string) => void;
+  /** Aşama süreleri (ms): readChanged, parseChanged, indexParse, indexBuild, enrich, riskAndTests, planGraphFindings, total. Ölçüm/log için. */
+  onTimings?: (timings: Readonly<Record<string, number>>) => void;
 }
 
 const READ_CONCURRENCY = 16;
+/** Diff dışı dosyalar: kaynak (git cat-file vb.) G/Ç'si baskın olduğundan daha yüksek eşzamanlılık. */
+const INDEX_READ_CONCURRENCY = 32;
 const DEFAULT_MAX_INDEX_FILES = 5000;
 
 function skeleton(csf: ChangeSetFile, moduleOf: (p: string) => string | undefined): FileChange {
@@ -107,12 +111,29 @@ async function parseSide(af: AnalyzedFile, side: 'old' | 'new', path: string, so
   }
 }
 
-async function analyzeJavaFile(cs: ChangeSet, af: AnalyzedFile, warnings: string[]): Promise<void> {
+interface JavaSources {
+  oldSrc?: string;
+  newSrc?: string;
+}
+
+/** Değişen Java dosyasının iki tarafını okur (G/Ç; eşzamanlı çalıştırılır). */
+async function readJavaSources(cs: ChangeSet, af: AnalyzedFile): Promise<JavaSources> {
+  const csf = af.cs;
+  const oldPath = csf.oldPath ?? csf.path;
+  const [oldSrc, newSrc] = await Promise.all([
+    csf.status !== 'added' ? safeRead(cs, 'old', oldPath) : undefined,
+    csf.status !== 'deleted' ? safeRead(cs, 'new', csf.path) : undefined,
+  ]);
+  return { oldSrc, newSrc };
+}
+
+/** Okunmuş kaynakları ayrıştırır ve semantik diff'i çıkarır (CPU; sırayla çalıştırılır). */
+async function analyzeJavaFile(af: AnalyzedFile, src: JavaSources, warnings: string[]): Promise<void> {
   const csf = af.cs;
   const oldPath = csf.oldPath ?? csf.path;
   const needOld = csf.status !== 'added';
   const needNew = csf.status !== 'deleted';
-  const [oldSrc, newSrc] = await Promise.all([needOld ? safeRead(cs, 'old', oldPath) : undefined, needNew ? safeRead(cs, 'new', csf.path) : undefined]);
+  const { oldSrc, newSrc } = src;
   if ((needOld && oldSrc === undefined) || (needNew && newSrc === undefined)) {
     af.unanalyzed = true;
     const methods = methodsFromHunkHeaders(csf);
@@ -138,44 +159,65 @@ async function analyzeJavaFile(cs: ChangeSet, af: AnalyzedFile, warnings: string
   }
 }
 
+/**
+ * Repo indeksi. Değişen dosyaların head modeli (adım 2'de ayrıştırılmış) yeniden okunmaz/ayrıştırılmaz; yalnızca
+ * diff dışındaki .java dosyaları okunur. Okuma eşzamanlı, ayrıştırma okuma tamamlandıkça yapılır.
+ */
 async function buildIndex(
   cs: ChangeSet,
   changed: AnalyzedFile[],
   maxFiles: number,
   warnings: string[],
   progress: (m: string) => void,
+  timings: Record<string, number>,
 ): Promise<{ index: RepoIndexApi; javaPaths: string[] }> {
   const changedModels = new Map<string, JavaFileModel>();
-  for (const af of changed) if (af.newModel) changedModels.set(af.file.path, af.newModel);
+  // Analiz edilemeyen (içerik/ayrıştırma sorunu) değişen dosyalar da indeks için tekrar okunmaz: aynı sonuç alınır.
+  const skip = new Set<string>();
+  for (const af of changed) {
+    skip.add(af.file.path);
+    if (af.newModel) changedModels.set(af.file.path, af.newModel);
+  }
   const javaPaths = await safeList(cs, '.java', warnings);
-  const others = javaPaths.filter((p) => !changedModels.has(p));
+  const others = javaPaths.filter((p) => !skip.has(p));
   const budget = Math.max(0, maxFiles - changedModels.size);
   if (others.length > budget) {
     warnings.push(`Repo indeksi ${maxFiles} dosya ile sınırlandı (repoda ${javaPaths.length} .java dosyası var); çağıran/alt sınıf bilgisi eksik olabilir`);
   }
   const toRead = others.slice(0, budget);
-  progress(`Repo indeksi kuruluyor (${changedModels.size + toRead.length} Java dosyası)`);
+  const total = changedModels.size + toRead.length;
+  const counter = progressCounter(progress, total, (d, t) => `Repo indeksi: ${d}/${t} dosya`, changedModels.size);
   let failed = 0;
-  const parsed = await mapLimit(toRead, READ_CONCURRENCY, async (p) => {
-    const src = await safeRead(cs, 'new', p);
-    if (src === undefined) {
-      failed++;
-      return undefined;
-    }
+  const t0 = performance.now();
+  const parsed = await mapLimit(toRead, INDEX_READ_CONCURRENCY, async (p) => {
     try {
-      return await parseJavaFile(p, src);
-    } catch {
-      failed++;
-      return undefined;
+      const src = await safeRead(cs, 'new', p);
+      if (src === undefined) {
+        failed++;
+        return undefined;
+      }
+      try {
+        return await parseJavaFile(p, src);
+      } catch {
+        failed++;
+        return undefined;
+      }
+    } finally {
+      counter.tick();
     }
   });
+  timings.indexParse = performance.now() - t0;
   if (failed > 0) warnings.push(`Repo indeksinde ${failed} dosya okunamadı/ayrıştırılamadı; bu dosyalardaki çağıranlar görünmeyebilir`);
   const models = [...changedModels.values(), ...parsed.filter((m): m is JavaFileModel => m !== undefined)];
+  progress(`Çağrı grafiği kuruluyor (${models.length} dosya)`);
+  const t1 = performance.now();
   try {
     return { index: RepoIndex.build(models), javaPaths };
   } catch (error) {
     warnings.push(`Repo indeksi kurulamadı (${errorMessage(error)}); çağıran ve kalıtım bilgisi yok`);
     return { index: createEmptyIndex(models), javaPaths };
+  } finally {
+    timings.indexBuild = performance.now() - t1;
   }
 }
 
@@ -183,9 +225,11 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   const progress = opts.onProgress ?? (() => undefined);
   const warnings: string[] = [];
   const maxIndexFiles = opts.maxIndexFiles ?? DEFAULT_MAX_INDEX_FILES;
+  const tStart = performance.now();
+  const timings: Record<string, number> = {};
 
   // 1. İskeletler
-  progress(`${cs.files.length} dosya hazırlanıyor`);
+  progress(`Değişiklik kümesi hazırlanıyor (${cs.files.length} dosya)`);
   const listed = await safeList(cs, undefined, warnings);
   const repoFilesKnown = listed.length > 0;
   const changedPaths = cs.files.map((f) => f.path);
@@ -199,19 +243,33 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   });
   const byPath = new Map(files.map((af) => [af.file.path, af]));
 
-  // 2. Java ayrıştırma + semantik diff
+  // 2. Değişen Java dosyalarını oku (eşzamanlı) + ayrıştır ve semantik diff (sırayla; CPU)
   const javaFiles = files.filter((af) => af.file.language === 'java' && !af.file.binary);
-  progress(`${javaFiles.length} Java dosyası ayrıştırılıyor`);
-  await mapLimit(javaFiles, READ_CONCURRENCY, async (af) => {
+  const tRead = performance.now();
+  const readCounter = progressCounter(progress, javaFiles.length, (d, t) => `Değişen dosyalar okunuyor (${d}/${t})`);
+  const sources = await mapLimit(javaFiles, READ_CONCURRENCY, async (af) => {
     try {
-      await analyzeJavaFile(cs, af, warnings);
+      return await readJavaSources(cs, af);
+    } finally {
+      readCounter.tick();
+    }
+  });
+  timings.readChanged = performance.now() - tRead;
+  const tParse = performance.now();
+  const parseCounter = progressCounter(progress, javaFiles.length, (d, t) => `Java ayrıştırılıyor (${d}/${t} dosya)`);
+  for (let i = 0; i < javaFiles.length; i++) {
+    const af = javaFiles[i];
+    try {
+      await analyzeJavaFile(af, sources[i], warnings);
     } catch (error) {
       af.unanalyzed = true;
       af.typeDiffs = [];
       af.file.parseError = `Analiz başarısız: ${errorMessage(error)}`;
       warnings.push(`${af.file.path}: analiz başarısız (${errorMessage(error)})`);
     }
-  });
+    parseCounter.tick();
+  }
+  timings.parseChanged = performance.now() - tParse;
   const allDiffs = javaFiles.flatMap((af) => af.typeDiffs);
   try {
     detectCrossFileMoves(allDiffs);
@@ -225,7 +283,7 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   }
 
   // 3. Repo indeksi
-  const { index } = await buildIndex(cs, javaFiles, maxIndexFiles, warnings, progress);
+  const { index } = await buildIndex(cs, javaFiles, maxIndexFiles, warnings, progress, timings);
 
   const ctx: AnalysisContext = {
     files,
@@ -245,12 +303,14 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   };
 
   // 4. Zenginleştirme
-  progress('Çağıranlar ve kalıtım ilişkileri çözülüyor');
+  const tEnrich = performance.now();
   registerSymbols(ctx);
   enrich(ctx);
+  timings.enrich = performance.now() - tEnrich;
 
   // 5. Kozmetik + katman + risk
-  progress('Risk hesaplanıyor');
+  progress('Risk ve mimari analiz');
+  const tRisk = performance.now();
   for (const af of files) {
     try {
       if (af.file.language === 'java' && !af.unanalyzed) {
@@ -317,7 +377,9 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   findings.push(...tests.findings);
 
   // 8. Gruplama, plan, graf
-  progress('Gruplar ve okuma planı hazırlanıyor');
+  timings.riskAndTests = performance.now() - tRisk;
+  progress('Okuma planı, gruplar ve etki grafiği hazırlanıyor');
+  const tPlan = performance.now();
   const types = uniqueTypes(allDiffs);
   const fileChanges = files.map((af) => af.file);
   const groups = buildGroups(allDiffs, fileChanges, ctx.staleCalls);
@@ -380,7 +442,10 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   );
 
   const summary = computeSummary(fileChanges, types, graphResult.impactedOutsideDiff, tests.untested);
-  progress('Analiz tamamlandı');
+  timings.planGraphFindings = performance.now() - tPlan;
+  timings.total = performance.now() - tStart;
+  opts.onTimings?.(timings);
+  progress(`Analiz tamamlandı (${files.length} dosya, ${types.length} tip, ${(timings.total / 1000).toFixed(1)} sn)`);
   return {
     id: opts.id ?? `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`,
     createdAt: new Date().toISOString(),

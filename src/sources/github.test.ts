@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -330,6 +331,80 @@ describe('createGithubChangeSet (API yolu)', () => {
       { type: 'add', newNo: 2, text: 'B' },
       { type: 'context', oldNo: 3, newNo: 3, text: 'c' },
     ]);
+  });
+
+  it('stableKey, sayfa ilerlemesi, diff dışı dosya contents API ile, yol geçişi reddi', async () => {
+    installFetch([
+      ...commonRoutes(prFiles(150)),
+      [
+        /^\/repos\/acme\/shop\/contents\//,
+        (url) => new Response(`// ${decodeURIComponent(url.pathname)} @ ${url.searchParams.get('ref')}\n`, { status: 200 }),
+      ],
+    ]);
+    const progress: string[] = [];
+    const cs = track(
+      await createGithubChangeSet({ url: 'https://www.github.com/acme/shop/pull/7/files', onProgress: (m) => progress.push(m) }),
+    );
+    expect(cs.info.stableKey).toBe('github:github.com/acme/shop#7');
+    expect(progress).toContain('GitHub dosya listesi: sayfa 1');
+    expect(progress).toContain('GitHub dosya listesi: sayfa 2');
+
+    // Diff dışı dosya (PR'da yok): head ve merge-base ağacından contents API ile
+    expect(await cs.readFile('new', 'src/main/Diger.java')).toBe(`// /repos/acme/shop/contents/src/main/Diger.java @ ${HEAD_SHA}\n`);
+    expect(await cs.readFile('old', 'docs/notlar.md')).toBe(`// /repos/acme/shop/contents/docs/notlar.md @ ${MB_SHA}\n`);
+
+    // '..' ve mutlak yol: GitHub'a istek bile gitmez
+    const before = calls.length;
+    expect(await cs.readFile('new', '../../../user')).toBeUndefined();
+    expect(await cs.readFile('new', 'src/../../pulls')).toBeUndefined();
+    expect(await cs.readFile('new', '/etc/passwd')).toBeUndefined();
+    expect(calls.length).toBe(before);
+  });
+
+  it('hata alanları: geçersiz URL → url, 401 → token, 404 → url', async () => {
+    await expect(createGithubChangeSet({ url: 'https://github.com/a/b/issues/1' })).rejects.toMatchObject({ field: 'url' });
+    installFetch([[/^\/repos\/acme\/shop\/pulls\/7$/, () => json({ message: 'Bad credentials' }, 401)]]);
+    await expect(createGithubChangeSet({ url: 'https://github.com/acme/shop/pull/7', token: TOKEN })).rejects.toMatchObject({
+      code: 'GITHUB_AUTH',
+      field: 'token',
+    });
+    installFetch([]);
+    await expect(createGithubChangeSet({ url: 'https://github.com/acme/shop/pull/7' })).rejects.toMatchObject({
+      code: 'GITHUB_NOT_FOUND',
+      field: 'url',
+    });
+  });
+
+  it('tarball indirme ilerlemesi MB olarak bildirilir', async () => {
+    const work = mkdtempSync(join(tmpdir(), 'reviewist-tartest-'));
+    cleanups.push(() => rmSync(work, { recursive: true, force: true }));
+    const prefix = 'acme-shop-ccccccc';
+    mkdirSync(join(work, prefix, 'src'), { recursive: true });
+    writeFileSync(join(work, prefix, 'src/F0.java'), 'class F0 {}\n');
+    // Sıkıştırılamayan ~6 MB'lık dosya: indirme sırasında en az bir MB mesajı üretir
+    writeFileSync(join(work, prefix, 'blob.bin'), randomBytes(6 * 1024 * 1024));
+    const tgz = join(work, 'repo.tgz');
+    await tarCreate({ gzip: true, cwd: work, file: tgz, portable: true }, [prefix]);
+    const tgzBytes = readFileSync(tgz);
+    installFetch([
+      ...commonRoutes(prFiles(1)),
+      [
+        /\/tarball\//,
+        () =>
+          new Response(tgzBytes, {
+            status: 200,
+            headers: { 'content-type': 'application/x-gzip', 'content-length': String(tgzBytes.length) },
+          }),
+      ],
+    ]);
+    const progress: string[] = [];
+    const cs = track(
+      await createGithubChangeSet({ url: 'https://github.com/acme/shop/pull/7', onProgress: (m) => progress.push(m) }),
+    );
+    await cs.listFiles('new', '.java');
+    expect(progress.some((m) => /^Tarball indiriliyor \(toplam \d+\.\d MB\)$/.test(m))).toBe(true);
+    expect(progress.some((m) => /^Tarball indiriliyor \([5-7] MB\)$/.test(m))).toBe(true);
+    expect(progress.some((m) => m.startsWith('Depo arşivi açıldı: 2 dosya'))).toBe(true);
   });
 });
 

@@ -97,12 +97,14 @@ export function createMemoryChangeSet(input: MemoryChangeSetInput): ChangeSet {
   for (const p of renameSources) if (!(p in input.new)) newSide.delete(p);
   for (const f of files) if (f.status === 'deleted') newSide.delete(f.path);
 
+  const title = input.info?.title ?? 'bellek içi değişiklik';
   const info: ReviewSourceInfo = {
     kind: 'git',
-    title: 'bellek içi değişiklik',
+    title,
     baseRef: 'base',
     headRef: 'head',
     ...input.info,
+    stableKey: input.info?.stableKey ?? `memory:${title}`,
   };
 
   return {

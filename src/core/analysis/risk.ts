@@ -337,7 +337,7 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
     const n = input.staleCalls.length;
     add(
       'removed-with-callers',
-      `${status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : 'İmzası değişti'} ama head'de hâlâ ${n} yerde eski haliyle çağrılıyor (${callSummary(input.staleCalls)}); derleme veya çalışma zamanı hatası olası`,
+      `${status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : 'İmzası değişti'} ama head'de hâlâ ${n} yerde eski haliyle çağrılıyor (${callSummary(input.staleCalls)})${status === 'signatureChanged' && oldM && newM && oldM.name === newM.name && oldM.params.length === newM.params.length ? '; argüman tipleri yeni parametre tipleriyle uyuşmuyor gibi görünüyor' : ''}; derleme veya çalışma zamanı hatası olası`,
       W.removedWithCallers + W.removedWithCallersPerCall * Math.min(n, 4),
     );
   }
@@ -583,7 +583,10 @@ export function scoreType(input: TypeRiskInput): RiskInfo {
   if (td.oldType && td.newType) {
     const oldSupers = (ch.oldSuperTypes ?? [...(td.oldType.superclass ? [td.oldType.superclass] : []), ...td.oldType.interfaces]).map(simpleTypeName).sort();
     const newSupers = ch.superTypes.map(simpleTypeName).sort();
-    if (oldSupers.join(',') !== newSupers.join(',')) {
+    // A1 'supertypes' bayrağı: basit adlar aynı kalsa da çözülmüş FQN'ler değiştiyse (başka paketteki aynı adlı tip) kalıtım değişmiştir.
+    const fqnChanged =
+      ch.flags.includes('supertypes') && ch.oldSuperTypes !== undefined && [...ch.oldSuperTypes].sort().join(',') !== [...ch.superTypes].sort().join(',');
+    if (oldSupers.join(',') !== newSupers.join(',') || fqnChanged) {
       add('supertypes-changed', `Kalıtım değişti: [${oldSupers.join(', ') || '-'}] → [${newSupers.join(', ') || '-'}]`, W.superTypesChanged);
     }
     const rank = { public: 3, protected: 2, package: 1, private: 0 } as const;

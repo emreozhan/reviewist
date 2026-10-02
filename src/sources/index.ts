@@ -65,7 +65,13 @@ export function formatZodError(err: z.ZodError): string {
     .join('; ');
 }
 
-/** Gövdeyi ReviewRequest olarak doğrular; hatada 400 SourceError. */
+/** İlk zod hatasının yolunun ilk elemanı (ör. 'base', 'url'); ApiError.field olarak döner. */
+export function zodErrorField(err: z.ZodError): string | undefined {
+  const first = err.issues[0]?.path[0];
+  return first === undefined ? undefined : String(first);
+}
+
+/** Gövdeyi ReviewRequest olarak doğrular; hatada 400 SourceError (`field`: ilk hatalı alan). */
 export function parseReviewRequest(input: unknown): ReviewRequest {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
     throw new SourceError('İstek gövdesi bir JSON nesnesi olmalı.', { status: 400, code: 'VALIDATION' });
@@ -75,6 +81,7 @@ export function parseReviewRequest(input: unknown): ReviewRequest {
     throw new SourceError(`Geçersiz review isteği: ${formatZodError(r.error)}`, {
       status: 400,
       code: 'VALIDATION',
+      field: zodErrorField(r.error),
     });
   }
   return r.data;
@@ -92,14 +99,22 @@ export async function createChangeSet(
   opts: CreateChangeSetOptions = {},
 ): Promise<ManagedChangeSet> {
   const r = parseReviewRequest(req);
+  const onProgress = opts.onProgress;
   switch (r.kind) {
     case 'git':
-      return await createGitChangeSet({ repoPath: r.repoPath, base: r.base, head: r.head, mode: r.mode ?? 'mergeBase' });
+      return await createGitChangeSet({
+        repoPath: r.repoPath,
+        base: r.base,
+        head: r.head,
+        mode: r.mode ?? 'mergeBase',
+        onProgress,
+      });
     case 'worktree':
       return await createWorktreeChangeSet({
         repoPath: r.repoPath,
         base: r.base,
         includeUntracked: r.includeUntracked ?? true,
+        onProgress,
       });
     case 'github':
       return await createGithubChangeSet({
@@ -107,9 +122,9 @@ export async function createChangeSet(
         token: r.token,
         localRepoPath: r.localRepoPath,
         tokenEnvNames: opts.tokenEnvNames,
-        onProgress: opts.onProgress,
+        onProgress,
       });
     case 'patch':
-      return await createPatchChangeSet({ text: r.text, repoPath: r.repoPath });
+      return await createPatchChangeSet({ text: r.text, repoPath: r.repoPath, onProgress });
   }
 }

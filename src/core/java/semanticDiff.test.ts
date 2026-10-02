@@ -239,7 +239,7 @@ describe('diffJavaFile: tip düzeyi', () => {
     const n = 'package p;\n@Component\npublic abstract class A extends Other implements Foo, Bar<String> {\n  void x() {}\n}\n';
     const t = td(await diff(o, n), 'p.A');
     expect(t.change.status).toBe('signatureChanged');
-    expect(t.change.flags).toEqual(['modifiers', 'annotations']);
+    expect(t.change.flags).toEqual(['modifiers', 'annotations', 'supertypes']);
     expect(t.change.details).toEqual([
       'abstract oldu',
       '@Component eklendi',

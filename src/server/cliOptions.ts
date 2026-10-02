@@ -25,21 +25,31 @@ export const HELP_TEXT = `Reviewist — Java değişiklikleri için yerel review
 Kullanım:
   reviewist [repoPath] [seçenekler]
 
+  repoPath verilmezse geçerli klasörün git deposu kullanılır. --base, --head, --worktree ya da --pr
+  verilirse ilk review sunucu açılınca hazırlanır (ilerleme konsola yazılır), sonra tarayıcı açılır.
+  Hiçbiri verilmezse yalnız sunucu açılır; review arayüzden başlatılır.
+
 Seçenekler:
-  --base <ref>        Taban dal/commit (varsayılan: origin/HEAD, main, master, develop)
-  --head <ref>        İncelenecek dal/commit (varsayılan: HEAD)
-  --worktree          Çalışma ağacındaki (commitlenmemiş) değişiklikleri incele (--base varsayılanı HEAD)
-  --pr <url>          GitHub PR adresi (https://github.com/sahip/depo/pull/123)
-  --token-env <AD>    GitHub token'ının okunacağı ortam değişkeni (varsayılan GITHUB_TOKEN, GH_TOKEN)
+  --base <ref>        Taban dal/etiket/commit (varsayılan: origin/HEAD, yoksa main, master, develop)
+  --head <ref>        İncelenecek dal/etiket/commit (varsayılan: HEAD). base ile head'in ortak
+                      atasından (merge-base) itibaren karşılaştırılır (PR görünümü)
+  --worktree          Çalışma ağacındaki commitlenmemiş değişiklikleri (izlenmeyen dosyalar dahil)
+                      incele; --base varsayılanı HEAD. --head ile birlikte kullanılamaz
+  --pr <url>          GitHub PR adresi (https://github.com/sahip/depo/pull/123 ya da sahip/depo#123).
+                      Klasör o PR'ın deposuysa PR yerel git ile getirilir, değilse GitHub API kullanılır
+  --token-env <AD>    GitHub token'ının okunacağı ortam değişkeni (bundan sonra GITHUB_TOKEN, GH_TOKEN
+                      denenir). Token komut satırında verilmez
   --port <n>          Sunucu portu (varsayılan ${DEFAULT_PORT})
-  --host <adres>      Bağlanılacak adres; yalnız loopback (varsayılan ${DEFAULT_HOST})
+  --host <adres>      Bağlanılacak adres; yalnız 127.0.0.1, localhost ya da ::1 (varsayılan ${DEFAULT_HOST})
   --no-open           Tarayıcıyı otomatik açma
-  --help              Bu yardımı göster
+  -h, --help          Bu yardımı göster
 
 Örnekler:
-  reviewist . --base main --head feature/x
-  reviewist --worktree
-  reviewist --pr https://github.com/acme/shop/pull/42
+  reviewist                                     Sunucuyu aç, review'u arayüzden başlat
+  reviewist . --base main --head feature/x      İki dalı karşılaştır
+  reviewist ../shop --base main                 Başka bir depoda HEAD'i main ile karşılaştır
+  reviewist --worktree                          Commitlenmemiş değişiklikleri incele
+  reviewist --pr https://github.com/acme/shop/pull/42 --token-env IS_TOKENI
 `;
 
 export class CliUsageError extends Error {

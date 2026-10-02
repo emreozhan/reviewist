@@ -589,6 +589,14 @@ function superTypesOfType(t: JavaType): string[] {
   return [...(t.superclass ? [t.superclass] : []), ...t.interfaces];
 }
 
+/** extends/implements kümesi değişti mi (arayüz sırası önemsiz). */
+function superChanged(o: JavaType, n: JavaType): boolean {
+  if ((o.superclass ?? '') !== (n.superclass ?? '')) return true;
+  const oi = new Set(o.interfaces);
+  const ni = new Set(n.interfaces);
+  return oi.size !== ni.size || [...ni].some((i) => !oi.has(i));
+}
+
 function compareTypeHeaders(o: JavaType, n: JavaType): { flags: ChangeFlag[]; details: string[]; changed: boolean } {
   const flags: ChangeFlag[] = [];
   const details: string[] = [];
@@ -628,6 +636,7 @@ function compareTypeHeaders(o: JavaType, n: JavaType): { flags: ChangeFlag[]; de
       changed = true;
     }
   }
+  if (superChanged(o, n)) flags.push('supertypes');
   return { flags, details, changed: changed || flags.length > 0 };
 }
 

@@ -2,6 +2,7 @@
  * Kaynaklar arasında paylaşılan yardımcılar: yaşam döngülü ChangeSet tipi, LRU önbellek,
  * ikili içerik tespiti, eşzamanlılık sınırlayıcı, eski/yeni taraf yol eşlemesi.
  */
+import { createHash } from 'node:crypto';
 import { isAbsolute, relative, resolve } from 'node:path';
 import type { ChangeSet, ChangeSetFile } from '../shared/types.js';
 
@@ -154,6 +155,51 @@ export function createSideResolver(files: ChangeSetFile[]): (side: 'old' | 'new'
     if (moved && moved.status === 'renamed') return { binary: moved.binary };
     return { path: p, binary: false };
   };
+}
+
+/**
+ * İstemciden gelen depo-göreli yolu doğrular ve normalize eder. Mutlak yol (`/x`, `\x`, `C:\x`, `C:x`),
+ * `..` bölümü, NUL ve satır sonu içeren ya da boş yol için undefined döner (yol geçişi koruması).
+ */
+export function sanitizeRepoRelPath(raw: string): string | undefined {
+  if (raw === '' || /[\0\r\n]/.test(raw)) return undefined;
+  if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:/.test(raw)) return undefined;
+  const parts = raw.replace(/\\/g, '/').split('/');
+  if (parts.some((s) => s === '..')) return undefined;
+  const clean = parts.filter((s) => s !== '' && s !== '.').join('/');
+  return clean === '' ? undefined : clean;
+}
+
+// ---------------------------------------------------------------------------
+// stableKey (ReviewSourceInfo.stableKey)
+// ---------------------------------------------------------------------------
+
+/** Depo yolunu anahtar için normalize eder: mutlak, `/` ayraçlı, sonda `/` yok; Windows'ta küçük harf. */
+export function normalizeRepoKeyPath(repoPath: string): string {
+  let p = resolve(repoPath).replace(/\\/g, '/');
+  if (p.length > 1) p = p.replace(/\/+$/, '');
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+/** `git:<repo>:<baseRef>...<headRef>:<mode>` (kullanıcının verdiği ref adlarıyla; SHA değişse de sabit). */
+export function gitStableKey(repoPath: string, baseRef: string, headRef: string, mode: 'range' | 'mergeBase'): string {
+  return `git:${normalizeRepoKeyPath(repoPath)}:${baseRef}...${headRef}:${mode}`;
+}
+
+/** `worktree:<repo>:<base>` */
+export function worktreeStableKey(repoPath: string, base: string): string {
+  return `worktree:${normalizeRepoKeyPath(repoPath)}:${base}`;
+}
+
+/** `github:<host>/<sahip>/<depo>#<n>`; GitHub adları büyük/küçük harf duyarsız olduğundan küçük harfle. */
+export function githubStableKey(host: string, owner: string, repo: string, number: number): string {
+  return `github:${host.toLowerCase()}/${owner.toLowerCase()}/${repo.toLowerCase()}#${number}`;
+}
+
+/** `patch:<sha1 ilk 12>`; CRLF → LF normalize edilir (yapıştırma farkı anahtarı bozmasın). */
+export function patchStableKey(text: string): string {
+  const sha = createHash('sha1').update(text.replace(/\r\n/g, '\n'), 'utf8').digest('hex');
+  return `patch:${sha.slice(0, 12)}`;
 }
 
 /** Uzantı filtresi (büyük/küçük harf duyarsız). */

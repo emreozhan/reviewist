@@ -1,13 +1,14 @@
 /**
  * `reviewist` komutu: yerel API sunucusunu (ve derlenmişse arayüzü) 127.0.0.1 üzerinde açar.
- * base/head, --worktree ya da --pr verilirse sunucu açılmadan önce ilk review hazırlanır.
+ * base/head, --worktree ya da --pr verilirse sunucu açıldıktan sonra ilk review iş (job) altyapısıyla hazırlanır,
+ * ilerleme konsola yazılır; tarayıcı review hazır olunca açılır.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
 import open from 'open';
-import type { ReviewRequest } from '../shared/types.js';
+import type { ApiError, ReviewJob, ReviewRequest } from '../shared/types.js';
 import { isSourceError, shortMessage } from '../sources/errors.js';
 import { getGitRefs, resolveRepoRoot } from '../sources/git.js';
 import { DEFAULT_TOKEN_ENVS } from '../sources/github.js';
@@ -42,8 +43,15 @@ function findStaticDir(): string | undefined {
   return undefined;
 }
 
+function formatApiError(e: ApiError): string {
+  let out = e.error;
+  if (e.field) out += `\n  Alan: ${e.field}`;
+  if (e.detail) out += `\n  Ayrıntı: ${e.detail}`;
+  return out;
+}
+
 function formatError(err: unknown): string {
-  if (isSourceError(err)) return err.detail ? `${err.message}\n  Ayrıntı: ${err.detail}` : err.message;
+  if (isSourceError(err)) return formatApiError({ error: err.message, detail: err.detail, field: err.field });
   return shortMessage(err, 500);
 }
 
@@ -105,58 +113,89 @@ async function main(): Promise<void> {
   let req: ReviewRequest | undefined;
   try {
     req = await initialRequest(opts, repoRoot);
-    if (req) {
-      const label = req.kind === 'github' ? req.url : req.kind === 'git' ? `${req.base}...${req.head}` : 'çalışma ağacı';
-      console.log(`İlk review hazırlanıyor: ${label}`);
-      const t0 = Date.now();
-      const model = await reviewist.createReview(req);
-      reviewist.setInitialReviewId(model.id);
-      console.log(
-        `Review hazır (${model.id}): ${model.files.length} dosya, ${model.warnings.length} uyarı, ${Date.now() - t0} ms`,
-      );
-      for (const w of model.warnings.slice(0, 5)) console.log(`  ! ${w}`);
-    }
   } catch (err) {
     console.error(`Hata: ${formatError(err)}`);
     await reviewist.dispose();
     process.exit(1);
   }
 
+  // Sunucu önce açılır: port sorunu uzun analizden önce fark edilir.
   const hostForUrl = opts.host === '::1' ? '[::1]' : opts.host;
   const url = `http://${hostForUrl}:${opts.port}/`;
-  const server = serve({ fetch: reviewist.app.fetch, port: opts.port, hostname: opts.host }, () => {
-    console.log(`Reviewist ${version} çalışıyor: ${url}`);
-    if (repoRoot) console.log(`Depo: ${repoRoot}`);
-    if (!staticDir) {
-      console.log('Yalnızca API modu (derlenmiş arayüz yok). Arayüz için `npm run dev:web` çalıştırın (http://localhost:5173).');
-    } else if (opts.open) {
-      open(url).catch((err: unknown) => console.warn(`Tarayıcı açılamadı: ${shortMessage(err, 120)}`));
-    }
-    console.log('Durdurmak için Ctrl+C.');
-  });
-
-  server.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`Port ${opts.port} kullanımda. Başka bir port seçin: --port ${opts.port + 1}`);
-    } else if (err.code === 'EACCES') {
-      console.error(`Port ${opts.port} için izin yok. 1024 üstü bir port seçin.`);
-    } else {
-      console.error(`Sunucu başlatılamadı: ${shortMessage(err, 200)}`);
-    }
-    void reviewist.dispose().finally(() => process.exit(1));
-  });
+  let server: ReturnType<typeof serve>;
+  try {
+    server = await listen(reviewist.app.fetch, opts.port, opts.host);
+  } catch (err) {
+    console.error(listenErrorMessage(err, opts.port));
+    await reviewist.dispose();
+    process.exit(1);
+  }
 
   let closing = false;
   const shutdown = (): void => {
     if (closing) return;
     closing = true;
     console.log('\nKapatılıyor…');
-    reviewist.dispose();
+    void reviewist.dispose();
     server.close();
     setTimeout(() => process.exit(0), 500).unref();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  if (req) {
+    const label = req.kind === 'github' ? req.url : req.kind === 'git' ? `${req.base}...${req.head}` : 'çalışma ağacı';
+    console.log(`İlk review hazırlanıyor: ${label}`);
+    const t0 = Date.now();
+    let job: ReviewJob | undefined;
+    try {
+      job = await reviewist.waitForJob(reviewist.startJob(req).id);
+    } catch (err) {
+      console.error(`Hata: ${formatError(err)}`);
+    }
+    const model = job?.status === 'done' && job.reviewId ? reviewist.getReview(job.reviewId) : undefined;
+    if (!model) {
+      if (job?.error) console.error(`Hata: ${formatApiError(job.error)}`);
+      closing = true;
+      await reviewist.dispose();
+      server.close();
+      process.exit(1);
+    }
+    reviewist.setInitialReviewId(model.id);
+    console.log(
+      `Review hazır (${model.id}): ${model.files.length} dosya, ${model.warnings.length} uyarı, ${Date.now() - t0} ms`,
+    );
+    for (const w of model.warnings.slice(0, 5)) console.log(`  ! ${w}`);
+    if (model.warnings.length > 5) console.log(`  ! … ve ${model.warnings.length - 5} uyarı daha (arayüzde)`);
+  }
+
+  console.log(`Reviewist ${version} çalışıyor: ${url}`);
+  if (repoRoot) console.log(`Depo: ${repoRoot}`);
+  if (!staticDir) {
+    console.log('Yalnızca API modu (derlenmiş arayüz yok). Arayüz için `npm run dev:web` çalıştırın (http://localhost:5173).');
+  } else if (opts.open) {
+    open(url).catch((err: unknown) => console.warn(`Tarayıcı açılamadı: ${shortMessage(err, 120)}`));
+  }
+  console.log('Durdurmak için Ctrl+C.');
+}
+
+/** Sunucuyu açar; dinlemeye başlayınca ya da hata olunca çözülür. */
+function listen(
+  fetch: Parameters<typeof serve>[0]['fetch'],
+  port: number,
+  hostname: string,
+): Promise<ReturnType<typeof serve>> {
+  return new Promise((resolveListen, rejectListen) => {
+    const server = serve({ fetch, port, hostname }, () => resolveListen(server));
+    server.once('error', (err: Error) => rejectListen(err));
+  });
+}
+
+function listenErrorMessage(err: unknown, port: number): string {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EADDRINUSE') return `Port ${port} kullanımda. Başka bir port seçin: --port ${port + 1}`;
+  if (code === 'EACCES') return `Port ${port} için izin yok. 1024 üstü bir port seçin.`;
+  return `Sunucu başlatılamadı: ${shortMessage(err, 200)}`;
 }
 
 main().catch((err: unknown) => {

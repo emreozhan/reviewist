@@ -274,3 +274,81 @@ describe('GitBlobReader', () => {
     await expect(reader.read(head, 'big.txt')).rejects.toThrow('kapatıldı');
   });
 });
+
+describe('stableKey, diff dışı dosyalar, hata alanları, ilerleme', () => {
+  it('git: stableKey ref adlarıyla sabit; diff dışı dosya iki ağaçtan okunur; ilerleme bildirilir', async () => {
+    const repo = makeRepo();
+    write(repo, 'src/A.java', 'class A {}\n');
+    write(repo, 'src/Sabit.java', 'class Sabit { int v1; }\n');
+    commitAll(repo, 'c1');
+    git(repo, 'checkout', '-q', '-b', 'feature/x');
+    write(repo, 'src/A.java', 'class A { int x; }\n');
+    commitAll(repo, 'c2');
+    git(repo, 'checkout', '-q', 'main');
+    write(repo, 'src/Sabit.java', 'class Sabit { int v2; }\n'); // yalnız main'de değişti (merge-base sonrası)
+    commitAll(repo, 'c3');
+
+    const progress: string[] = [];
+    const cs = track(
+      await createGitChangeSet({ repoPath: repo, base: 'main', head: 'feature/x', onProgress: (m) => progress.push(m) }),
+    );
+    expect(cs.files.map((f) => f.path)).toEqual(['src/A.java']);
+    expect(progress).toContain('git diff alınıyor');
+    expect(progress).toContain('git diff ayrıştırıldı: 1 dosya');
+    const keyRepo = (process.platform === 'win32' ? repo.toLowerCase() : repo).replace(/\\/g, '/');
+    expect(cs.info.stableKey).toBe(`git:${keyRepo}:main...feature/x:mergeBase`);
+    const range = track(await createGitChangeSet({ repoPath: join(repo, 'src'), base: 'main', head: 'feature/x', mode: 'range' }));
+    expect(range.info.stableKey).toBe(`git:${keyRepo}:main...feature/x:range`);
+
+    // Diff dışı: new = head ağacı, old = merge-base ağacı
+    expect(await cs.readFile('new', 'src/Sabit.java')).toBe('class Sabit { int v1; }\n');
+    expect(await cs.readFile('old', 'src/Sabit.java')).toBe('class Sabit { int v1; }\n');
+    expect(await range.readFile('old', 'src/Sabit.java')).toBe('class Sabit { int v2; }\n');
+    // Yol güvenliği
+    expect(await cs.readFile('new', '../x')).toBeUndefined();
+    expect(await cs.readFile('new', '/src/A.java')).toBeUndefined();
+    expect(await cs.readFile('new', 'C:\\x')).toBeUndefined();
+    expect(await cs.readFile('new', 'src\\A.java')).toBe('class A { int x; }\n');
+  });
+
+  it('worktree: stableKey; diff dışı yeni taraf yalnız ls-files kümesinden', async () => {
+    const repo = makeRepo();
+    write(repo, 'src/A.java', 'class A {}\n');
+    write(repo, 'src/Sabit.java', 'class Sabit {}\n');
+    write(repo, '.gitignore', '.env\n');
+    commitAll(repo, 'c1');
+    write(repo, '.env', 'SECRET=1\n');
+    write(repo, 'src/A.java', 'class A { int x; }\n');
+    const progress: string[] = [];
+    const cs = track(await createWorktreeChangeSet({ repoPath: repo, onProgress: (m) => progress.push(m) }));
+    const keyRepo = (process.platform === 'win32' ? repo.toLowerCase() : repo).replace(/\\/g, '/');
+    expect(cs.info.stableKey).toBe(`worktree:${keyRepo}:HEAD`);
+    expect(progress[0]).toContain("Çalışma ağacı diff'i alınıyor");
+    expect(await cs.readFile('new', 'src/Sabit.java')).toBe('class Sabit {}\n');
+    expect(await cs.readFile('old', 'src/Sabit.java')).toBe('class Sabit {}\n');
+    expect(await cs.readFile('new', '.env')).toBeUndefined();
+    expect(await cs.readFile('new', 'src/../.env')).toBeUndefined();
+  });
+
+  it('kaynak hatalarında field: repoPath / base / head', async () => {
+    const notRepo = mkdtempSync(join(tmpdir(), 'reviewist-norepo-'));
+    cleanups.push(() => rmSync(notRepo, { recursive: true, force: true }));
+    await expect(createGitChangeSet({ repoPath: notRepo, base: 'a', head: 'b' })).rejects.toMatchObject({
+      code: 'NOT_A_REPO',
+      field: 'repoPath',
+    });
+    await expect(createGitChangeSet({ repoPath: join(notRepo, 'yok'), base: 'a', head: 'b' })).rejects.toMatchObject({
+      code: 'PATH_NOT_FOUND',
+      field: 'repoPath',
+    });
+    const repo = makeRepo();
+    write(repo, 'A.java', 'class A {}\n');
+    commitAll(repo, 'c1');
+    await expect(createGitChangeSet({ repoPath: repo, base: 'yok', head: 'main' })).rejects.toMatchObject({ field: 'base' });
+    await expect(createGitChangeSet({ repoPath: repo, base: 'main', head: '-x' })).rejects.toMatchObject({
+      code: 'VALIDATION',
+      field: 'head',
+    });
+    await expect(createWorktreeChangeSet({ repoPath: repo, base: 'yok' })).rejects.toMatchObject({ field: 'base' });
+  });
+});

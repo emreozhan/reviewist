@@ -17,10 +17,11 @@ import {
   createLimiter,
   createSideResolver,
   filterByExt,
+  githubStableKey,
   isBinaryBuffer,
   LruCache,
-  normalizeRepoPath,
   resolveInside,
+  sanitizeRepoRelPath,
   type ManagedChangeSet,
 } from './common.js';
 import { SourceError, shortMessage } from './errors.js';
@@ -48,7 +49,7 @@ export function parsePrUrl(input: string): PrRef {
   const bad = (): SourceError =>
     new SourceError(
       `Geçersiz PR adresi: '${raw}'. Beklenen biçim: https://github.com/{sahip}/{depo}/pull/{numara}`,
-      { status: 400, code: 'BAD_URL' },
+      { status: 400, code: 'BAD_URL', field: 'url' },
     );
   const short = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)$/.exec(raw);
   if (short) {
@@ -205,7 +206,7 @@ export class GitHubClient {
     if (res.status === 401) {
       return new SourceError(
         'GitHub token geçersiz ya da süresi dolmuş (401). GITHUB_TOKEN / GH_TOKEN değerini kontrol edin.',
-        { status: 401, code: 'GITHUB_AUTH', detail },
+        { status: 401, code: 'GITHUB_AUTH', detail, field: 'token' },
       );
     }
     if (isRateLimit) {
@@ -222,13 +223,13 @@ export class GitHubClient {
       const msg = this.hasToken
         ? `GitHub erişimi reddedildi (403): ${prName}. Token'ın bu depoya okuma izni (Contents ve Pull requests: read) olmalı.`
         : `GitHub erişimi reddedildi (403): ${prName}. Bu depo için token gerekli; GITHUB_TOKEN ortam değişkenini ayarlayın.`;
-      return new SourceError(msg, { status: 403, code: 'GITHUB_FORBIDDEN', detail });
+      return new SourceError(msg, { status: 403, code: 'GITHUB_FORBIDDEN', detail, field: 'token' });
     }
     if (res.status === 404) {
       const msg = this.hasToken
         ? `PR bulunamadı: ${prName}. PR numarasını ve token'ın bu depoya erişimi olduğunu kontrol edin.`
         : `PR bulunamadı: ${prName}. PR yok ya da depo özel; özel depolar için GITHUB_TOKEN (ya da GH_TOKEN) ortam değişkenini ayarlayın.`;
-      return new SourceError(msg, { status: 404, code: 'GITHUB_NOT_FOUND', detail });
+      return new SourceError(msg, { status: 404, code: 'GITHUB_NOT_FOUND', detail, field: 'url' });
     }
     return new SourceError(`GitHub API hatası (HTTP ${res.status}).`, { status: 502, code: 'GITHUB_FAILED', detail });
   }
@@ -344,6 +345,7 @@ function prInfo(pr: PrRef, meta: GhPull): ReviewSourceInfo {
     headSha: meta.head.sha,
     prUrl: meta.html_url ?? pr.webUrl,
     prNumber: meta.number,
+    stableKey: githubStableKey(pr.host, pr.owner, pr.repo, pr.number),
   };
   if (meta.user?.login) info.author = meta.user.login;
   if (meta.body) info.description = meta.body;
@@ -420,6 +422,7 @@ async function tryLocalRepo(
       base: hasBase2.code === 0 ? meta.base.sha : `${prRef}-base`,
       head: hasHead.code === 0 ? meta.head.sha : prRef,
       mode: 'mergeBase',
+      onProgress: progress,
     });
     cs.info = { ...info, repoPath: top, baseSha: cs.info.baseSha, headSha: cs.info.headSha };
     cs.warnings.unshift(...warnings);
@@ -457,9 +460,9 @@ async function createApiChangeSet(
   }
   info.baseSha = oldSha;
 
-  progress('PR dosya listesi alınıyor');
   const ghFiles: GhPrFile[] = [];
   for (let page = 1; page <= MAX_PR_FILES / 100; page++) {
+    progress(`GitHub dosya listesi: sayfa ${page}`);
     const data = await client.json(`${base}/pulls/${pr.number}/files?per_page=100&page=${page}`);
     const list = parseApi(z.array(prFileSchema), data, 'PR dosyaları');
     ghFiles.push(...list);
@@ -560,6 +563,7 @@ async function createApiChangeSet(
       }
       if (!res.body) throw new Error('boş yanıt');
       if (disposed) throw new Error('oturum kapatıldı');
+      if (len > 0) progress(`Tarball indiriliyor (toplam ${(len / 1024 / 1024).toFixed(1)} MB)`);
       tmpDir = mkdtempSync(join(tmpdir(), 'reviewist-gh-'));
       const dir = tmpDir;
       const paths: string[] = [];
@@ -588,11 +592,17 @@ async function createApiChangeSet(
         unpack.on('error', (e: unknown) => rejectDone(e instanceof Error ? e : new Error(String(e))));
       });
       let total = 0;
+      let reportedMb = 0;
       const reader = res.body.getReader();
       for (;;) {
         const { value, done: eof } = await reader.read();
         if (eof) break;
         total += value.byteLength;
+        const mb = Math.floor(total / (1024 * 1024));
+        if (mb >= reportedMb + 5) {
+          reportedMb = mb;
+          progress(`Tarball indiriliyor (${mb} MB)`);
+        }
         if (total > MAX_TARBALL_BYTES) {
           await reader.cancel();
           throw new Error('arşiv 200 MB sınırını aştı');
@@ -603,7 +613,7 @@ async function createApiChangeSet(
       await done;
       const result: TarballResult = { dir: join(dir, prefix ?? ''), paths, extracted };
       tarballDone = result;
-      progress(`Depo arşivi açıldı: ${paths.length} dosya`);
+      progress(`Depo arşivi açıldı: ${paths.length} dosya (${(total / 1024 / 1024).toFixed(1)} MB)`);
       return result;
     } catch (err) {
       warnings.push(
@@ -631,7 +641,11 @@ async function createApiChangeSet(
     files,
     warnings,
     async readFile(side, rawPath) {
-      const t = sideOf(side, normalizeRepoPath(rawPath));
+      // Diff dışı dosyalar: head'de tarball'dan (.java çıkarıldıysa), aksi halde contents API'den okunur.
+      // `..`/mutlak yol reddedilir (URL normalizasyonuyla başka API yollarına kaçmayı da önler).
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
+      const t = sideOf(side, path);
       if (t.path === undefined || t.binary) return undefined;
       return await fetchContent(side === 'old' ? oldSha : headSha, t.path);
     },

@@ -11,9 +11,12 @@ import {
   createLimiter,
   createSideResolver,
   filterByExt,
+  gitStableKey,
   isBinaryBuffer,
   LruCache,
   resolveInside,
+  sanitizeRepoRelPath,
+  worktreeStableKey,
   type ManagedChangeSet,
 } from './common.js';
 import { SourceError } from './errors.js';
@@ -59,12 +62,17 @@ function trimDetail(s: string, max = 400): string {
 function classifyGitError(repoPath: string, args: string[], stderr: string, code: number): SourceError {
   const detail = trimDetail(stderr) || `çıkış kodu ${code}`;
   if (/not a git repository/i.test(stderr)) {
-    return new SourceError(`Klasör bir git deposu değil: ${repoPath}`, { status: 400, code: 'NOT_A_REPO', detail });
+    return new SourceError(`Klasör bir git deposu değil: ${repoPath}`, {
+      status: 400,
+      code: 'NOT_A_REPO',
+      detail,
+      field: 'repoPath',
+    });
   }
   if (/dubious ownership/i.test(stderr)) {
     return new SourceError(
       `Git bu klasörü güvenli bulmuyor (safe.directory). Şunu çalıştırın: git config --global --add safe.directory "${repoPath}"`,
-      { status: 400, code: 'NOT_A_REPO', detail },
+      { status: 400, code: 'NOT_A_REPO', detail, field: 'repoPath' },
     );
   }
   if (
@@ -89,7 +97,7 @@ function assertDirectory(repoPath: string): void {
     isDir = false;
   }
   if (!isDir) {
-    throw new SourceError(`Klasör bulunamadı: ${repoPath}`, { status: 400, code: 'PATH_NOT_FOUND' });
+    throw new SourceError(`Klasör bulunamadı: ${repoPath}`, { status: 400, code: 'PATH_NOT_FOUND', field: 'repoPath' });
   }
 }
 
@@ -181,7 +189,9 @@ export async function resolveRepoRoot(repoPath: string): Promise<string> {
   const abs = resolve(repoPath);
   const out = await runGit(abs, ['rev-parse', '--show-toplevel']);
   const top = out.trim();
-  if (!top) throw new SourceError(`Klasör bir git deposu değil: ${abs}`, { status: 400, code: 'NOT_A_REPO' });
+  if (!top) {
+    throw new SourceError(`Klasör bir git deposu değil: ${abs}`, { status: 400, code: 'NOT_A_REPO', field: 'repoPath' });
+  }
   return resolve(top);
 }
 
@@ -192,7 +202,7 @@ export async function resolveRepoRoot(repoPath: string): Promise<string> {
 export function assertSafeRef(ref: string, field = 'ref'): void {
   // eslint-disable-next-line no-control-regex
   if (!ref || ref.startsWith('-') || /[\x00-\x20\x7f]/.test(ref)) {
-    throw new SourceError(`Geçersiz git referansı (${field}): '${ref}'`, { status: 400, code: 'VALIDATION' });
+    throw new SourceError(`Geçersiz git referansı (${field}): '${ref}'`, { status: 400, code: 'VALIDATION', field });
   }
 }
 
@@ -206,6 +216,7 @@ export async function resolveCommit(top: string, ref: string, field = 'ref'): Pr
       status: 400,
       code: 'REF_NOT_FOUND',
       detail: trimDetail(r.stderr) || undefined,
+      field,
     });
   }
   return sha;
@@ -401,6 +412,7 @@ export interface GitChangeSetOptions {
   head: string;
   /** 'mergeBase' (varsayılan, PR semantiği) ya da 'range' (doğrudan iki commit). */
   mode?: 'range' | 'mergeBase';
+  onProgress?: (msg: string) => void;
 }
 
 const DIFF_ARGS = [
@@ -424,12 +436,15 @@ function diffWarnings(stderr: string): string[] {
 }
 
 export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<ManagedChangeSet> {
+  const progress = opts.onProgress ?? (() => undefined);
+  const mode = opts.mode ?? 'mergeBase';
   const top = await resolveRepoRoot(opts.repoPath);
   const warnings: string[] = [];
+  progress(`Git referansları çözülüyor: ${opts.base}...${opts.head}`);
   const baseTip = await resolveCommit(top, opts.base, 'base');
   const headSha = await resolveCommit(top, opts.head, 'head');
   let baseSha = baseTip;
-  if ((opts.mode ?? 'mergeBase') === 'mergeBase') {
+  if (mode === 'mergeBase') {
     const r = await runGitResult(top, ['merge-base', baseTip, headSha]);
     const mb = r.stdout.trim();
     if (r.code === 0 && mb) baseSha = mb;
@@ -440,10 +455,12 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
     }
   }
 
+  progress('git diff alınıyor');
   const diff = await runGitResult(top, [...DIFF_ARGS, baseSha, headSha], { config: DIFF_CONFIG });
   if (diff.code !== 0) throw classifyGitError(top, ['diff'], diff.stderr, diff.code);
   warnings.push(...diffWarnings(diff.stderr));
   const files = parseUnifiedDiff(diff.stdout);
+  progress(`git diff ayrıştırıldı: ${files.length} dosya`);
 
   const reader = new GitBlobReader(top);
   const sideOf = createSideResolver(files);
@@ -458,10 +475,14 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
       headRef: opts.head,
       baseSha,
       headSha,
+      stableKey: gitStableKey(top, opts.base, opts.head, mode),
     },
     files,
     warnings,
-    async readFile(side, path) {
+    async readFile(side, rawPath) {
+      // Diff dışındaki dosyalar da okunabilir: eşleşme yoksa ilgili commit ağacından (baseSha/headSha) okunur.
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
       const t = sideOf(side, path);
       if (t.path === undefined || t.binary || reader.closed) return undefined;
       return await reader.readText(side === 'old' ? baseSha : headSha, t.path);
@@ -484,17 +505,20 @@ export interface WorktreeChangeSetOptions {
   repoPath: string;
   base?: string;
   includeUntracked?: boolean;
+  onProgress?: (msg: string) => void;
 }
 
 const MAX_UNTRACKED = 2000;
 const MAX_UNTRACKED_BYTES = 5 * 1024 * 1024;
 
 export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): Promise<ManagedChangeSet> {
+  const progress = opts.onProgress ?? (() => undefined);
   const top = await resolveRepoRoot(opts.repoPath);
   const base = opts.base ?? 'HEAD';
   const warnings: string[] = [];
   const baseSha = await resolveCommit(top, base, 'base');
 
+  progress(`Çalışma ağacı diff'i alınıyor (taban: ${base})`);
   const diff = await runGitResult(top, [...DIFF_ARGS, baseSha], { config: DIFF_CONFIG });
   if (diff.code !== 0) throw classifyGitError(top, ['diff'], diff.stderr, diff.code);
   warnings.push(...diffWarnings(diff.stderr));
@@ -504,6 +528,7 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
     const untracked = splitNul(await runGit(top, ['ls-files', '-z', '--others', '--exclude-standard']));
     const known = new Set(files.map((f) => f.path));
     let list = untracked.filter((p) => !known.has(p));
+    if (list.length > 0) progress(`İzlenmeyen dosyalar okunuyor: ${list.length}`);
     if (list.length > MAX_UNTRACKED) {
       warnings.push(`${list.length} izlenmeyen dosya var; yalnızca ilk ${MAX_UNTRACKED} tanesi dahil edildi.`);
       list = list.slice(0, MAX_UNTRACKED);
@@ -553,10 +578,14 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
       baseRef: base,
       headRef: 'WORKTREE',
       baseSha,
+      stableKey: worktreeStableKey(top, base),
     },
     files,
     warnings,
-    async readFile(side, path) {
+    async readFile(side, rawPath) {
+      // Diff dışı dosyalar: eski taraf taban commit ağacından, yeni taraf diskten (yalnız ls-files kümesindekiler).
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
       const t = sideOf(side, path);
       if (t.path === undefined || t.binary) return undefined;
       if (side === 'old') {

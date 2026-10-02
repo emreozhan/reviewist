@@ -24,13 +24,16 @@ export class SourceError extends Error {
   readonly status: number;
   readonly code: SourceErrorCode;
   readonly detail?: string;
+  /** Hatanın ilgili olduğu istek alanı (ör. 'repoPath', 'base', 'head', 'url', 'token'); ApiError.field'e taşınır. */
+  readonly field?: string;
 
-  constructor(message: string, opts: { status: number; code: SourceErrorCode; detail?: string }) {
+  constructor(message: string, opts: { status: number; code: SourceErrorCode; detail?: string; field?: string }) {
     super(message);
     this.name = 'SourceError';
     this.status = opts.status;
     this.code = opts.code;
     this.detail = opts.detail;
+    this.field = opts.field;
   }
 }
 

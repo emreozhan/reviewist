@@ -191,6 +191,17 @@ function argCountOf(args: Node | null): number {
   return args ? namedNonComment(args).length : 0;
 }
 
+const MAX_ARG_TEXT = 80;
+
+/** Argüman ifadelerinin kısaltılmış metinleri (tip çıkarımı için). */
+function argTextsOf(ctx: FileCtx, args: Node | null): string[] {
+  if (!args) return [];
+  return namedNonComment(args).map((a) => {
+    const t = collapseWs(ctx.slice(a));
+    return t.length > MAX_ARG_TEXT ? `${t.slice(0, MAX_ARG_TEXT)}…` : t;
+  });
+}
+
 function emptyFeatures(): CodeFeatures {
   return {
     catches: 0,
@@ -342,6 +353,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         line: (nameNode ?? n).startPosition.row + 1,
         isConstructor: false,
         isMethodRef: false,
+        args: argTextsOf(ctx, args),
       };
       const objText = obj ? collapseWs(ctx.slice(obj)).replace(/\s*\.\s*/g, '.') : undefined;
       if (objText !== undefined) site.receiver = objText;
@@ -368,6 +380,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         line: n.startPosition.row + 1,
         isConstructor: true,
         isMethodRef: false,
+        args: argTextsOf(ctx, args),
       };
       if (obj) site.receiver = collapseWs(ctx.slice(obj));
       a.callSites.push(site);
@@ -405,6 +418,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         line: n.startPosition.row + 1,
         isConstructor: true,
         isMethodRef: false,
+        args: argTextsOf(ctx, args),
       });
       return;
     }

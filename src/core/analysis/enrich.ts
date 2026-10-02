@@ -3,7 +3,9 @@
  * silinmiş/değişmiş ama head'de hâlâ eski haliyle çağrılan üyeler ve kırılan override'lar.
  */
 import type { CallRef } from '../../shared/types.js';
-import type { JavaMember } from '../java/model.js';
+import type { JavaMember, ResolvedMember } from '../java/model.js';
+import { eraseTypeForId } from '../java/names.js';
+import { argCompatibility, inferArgType, typeVarsOf } from './argTypes.js';
 import type { AnalysisContext } from './context.js';
 import { isSemanticChange } from './risk.js';
 import { simpleTypeName } from './util.js';
@@ -28,22 +30,33 @@ export function markChangedCode(ctx: AnalysisContext, calls: readonly CallRef[])
   return calls.map((c) => ({ ...c, inChangedCode: ctx.byPath.get(c.file)?.addedLines.has(c.line) ?? false }));
 }
 
+const CONFIDENCE_RANK: Record<CallRef['confidence'], number> = { exact: 2, likely: 1, 'name-only': 0 };
+
+/**
+ * Aynı (fromId, line) çağrısını teke indirir; güveni en yüksek olan kalır. İlk görülme sırası korunur.
+ * (Doğrudan çağrı + arayüz üzerinden polimorfik çağrı aynı satıra iki kez düşebilir.)
+ */
+export function dedupeCallers(calls: readonly CallRef[]): CallRef[] {
+  const byKey = new Map<string, CallRef>();
+  for (const c of calls) {
+    const key = `${c.fromId}|${c.line}`;
+    const prev = byKey.get(key);
+    if (!prev) byKey.set(key, c);
+    else if (CONFIDENCE_RANK[c.confidence] > CONFIDENCE_RANK[prev.confidence]) byKey.set(key, { ...c, inChangedCode: prev.inChangedCode || c.inChangedCode });
+  }
+  return [...byKey.values()];
+}
+
 /**
  * Doğrudan çağıranlar + override edilen üst tip metotlarının çağıranları (arayüz/port üzerinden polimorfik çağrı).
- * Polimorfik çağrılar 'likely' güvenle eklenir.
+ * Polimorfik çağrılar 'likely' güvenle eklenir. Sonuçta (fromId, line) tekrarı yoktur; en yüksek güven kalır.
  */
 function withPolymorphicCallers(ctx: AnalysisContext, id: string, overrides: readonly string[]): CallRef[] {
-  const out = ctx.index.callersOf(id);
-  const seen = new Set(out.map((c) => `${c.fromId}|${c.file}|${c.line}`));
+  const out = [...ctx.index.callersOf(id)];
   for (const sup of overrides) {
-    for (const c of ctx.index.callersOf(sup)) {
-      const key = `${c.fromId}|${c.file}|${c.line}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ ...c, confidence: c.confidence === 'exact' ? 'likely' : c.confidence });
-    }
+    for (const c of ctx.index.callersOf(sup)) out.push({ ...c, confidence: c.confidence === 'exact' ? 'likely' : c.confidence });
   }
-  return out;
+  return dedupeCallers(out);
 }
 
 function arityMatches(m: JavaMember, argCount: number): boolean {
@@ -124,7 +137,10 @@ function findStale(ctx: AnalysisContext, id: string, status: string, oldM: JavaM
     status === 'renamed' ||
     status === 'moved' ||
     (status === 'signatureChanged' && (!newM || newM.params.length !== arity || newM.name !== oldM.name));
-  if (!relevant) return;
+  if (!relevant) {
+    if (status === 'signatureChanged' && newM) findTypeMismatchedCalls(ctx, id, oldM, newM, name);
+    return;
+  }
   const headOwner = index.getType(owner);
   // Head'de sahip tipte veya üst tiplerinde aynı ad ve uyumlu arity'de metot kaldıysa (overload / kalıtılan) çağrılar ona gider.
   const stillCallable = hierarchyHas(ctx, owner, oldM.kind, oldM.name, arity);
@@ -144,6 +160,59 @@ function findStale(ctx: AnalysisContext, id: string, status: string, oldM: JavaM
       if (broken.length) ctx.brokenOverrides.set(id, broken);
     }
   }
+}
+
+/**
+ * Aynı ad + arity, ama parametre tipleri değişmiş metot/yapıcı: head'deki çağrıların argüman tipleri çıkarılabiliyor ve
+ * hiçbir aday overload'a uymuyorsa çağrı 'likely' güvenle bayat sayılır. Çıkarılamayan argümanlarda sessiz kalınır.
+ */
+function findTypeMismatchedCalls(ctx: AnalysisContext, id: string, oldM: JavaMember, newM: JavaMember, name: string): void {
+  if (newM.name !== oldM.name || newM.params.length !== oldM.params.length) return;
+  const typesChanged = oldM.params.some((p, i) => eraseTypeForId(p.type) !== eraseTypeForId(newM.params[i].type));
+  if (!typesChanged) return;
+  const { index } = ctx;
+  const arity = newM.params.length;
+  const candidates = overloadsInHierarchy(ctx, newM.ownerFqn, newM.kind, newM.name, arity);
+  if (!candidates.length) return;
+  const stale: CallRef[] = [];
+  for (const call of index.findCallsTo(newM.ownerFqn, name, arity)) {
+    if (!index.files.has(call.file)) continue;
+    const caller = index.getMember(call.fromId);
+    if (!caller) continue;
+    const site = caller.member.callSites.find((s) => s.line === call.line && s.name === name && !s.isMethodRef && s.argCount === arity && s.args?.length === arity);
+    if (!site?.args) continue;
+    const argTypes = site.args.map((a) => inferArgType(a, caller.member, caller.type));
+    if (argTypes.every((t) => t === undefined)) continue;
+    const fitsSome = candidates.some((cand) => {
+      const vars = typeVarsOf(cand.member, cand.type);
+      return cand.member.params.every((p, i) => {
+        const at = argTypes[i];
+        if (at === undefined) return true;
+        return argCompatibility(index, at, { file: caller.file, type: caller.type }, p.type, { file: cand.file, type: cand.type }, vars) !== 'mismatch';
+      });
+    });
+    if (!fitsSome) stale.push({ ...call, confidence: 'likely' });
+  }
+  if (stale.length) ctx.staleCalls.set(id, markChangedCode(ctx, dedupeCallers(stale)));
+}
+
+/** Sahip tip ve üst tiplerindeki (yapıcıda yalnız sahip) aynı ad ve arity'deki üyeler. */
+function overloadsInHierarchy(ctx: AnalysisContext, owner: string, kind: JavaMember['kind'], name: string, arity: number): ResolvedMember[] {
+  const out: ResolvedMember[] = [];
+  const seen = new Set<string>();
+  const queue = [owner];
+  while (queue.length) {
+    const fqn = queue.shift() as string;
+    if (seen.has(fqn)) continue;
+    seen.add(fqn);
+    const t = ctx.index.getType(fqn);
+    const f = ctx.index.getFileOfType(fqn);
+    if (!t || !f) continue;
+    for (const m of t.members) if (m.kind === kind && m.name === name && arityMatches(m, arity)) out.push({ member: m, type: t, file: f });
+    if (kind === 'constructor') break;
+    queue.push(...ctx.index.superTypesOf(fqn));
+  }
+  return out;
 }
 
 function hierarchyHas(ctx: AnalysisContext, owner: string, kind: JavaMember['kind'], name: string, arity: number): boolean {

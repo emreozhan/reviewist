@@ -41,12 +41,6 @@ export function packageOf(fqn: string): string {
   return i >= 0 ? fqn.slice(0, i) : '';
 }
 
-/** Üye id'sinden sahibi: 'com.acme.A#f(int)' → 'com.acme.A'. Tip id'si ise kendisi. */
-export function ownerOfId(id: string): string {
-  const i = id.indexOf('#');
-  return i >= 0 ? id.slice(0, i) : id;
-}
-
 /** Okunur etiket: 'com.acme.OrderService#place(Order,int)' → 'OrderService.place', tip → basit ad. */
 export function symbolLabel(id: string): string {
   const i = id.indexOf('#');
@@ -141,6 +135,30 @@ export async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (it
   return results;
 }
 
+/**
+ * Sayısal ilerleme bildirici: toplamın ~%10'unda bir (ve sonda) mesaj üretir; küçük toplamlarda her adımda.
+ * `tick()` bir öğe tamamlandığında çağrılır. `start` verilirse sayaç oradan başlar (ör. zaten hazır olanlar).
+ */
+export function progressCounter(emit: (msg: string) => void, total: number, label: (done: number, total: number) => string, start = 0): { tick(): void } {
+  const step = Math.max(1, Math.ceil(total / 10));
+  let done = start;
+  let lastEmitted = -1;
+  if (total > 0) {
+    emit(label(done, total));
+    lastEmitted = done;
+  }
+  return {
+    tick() {
+      done++;
+      if (done === lastEmitted) return;
+      if (done >= total || done - lastEmitted >= step) {
+        emit(label(Math.min(done, total), total));
+        lastEmitted = done;
+      }
+    },
+  };
+}
+
 /** Hunk'lardan eklenen (yeni satır no) ve silinen (eski satır no) satır kümeleri. */
 export function changedLineSets(hunks: readonly DiffHunk[]): { added: Set<number>; removed: Set<number> } {
   const added = new Set<number>();
@@ -163,14 +181,47 @@ export function countMatches(text: string | undefined, re: RegExp): number {
   return n;
 }
 
-export function uniq<T>(items: Iterable<T>): T[] {
-  return [...new Set(items)];
-}
-
-export function plural(n: number, word: string): string {
-  return `${n} ${word}`;
-}
-
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** İkili yığın (min-heap; `less(a, b)` a önce gelmeli ise true). push/pop O(log n). */
+export class BinaryHeap<T> {
+  private readonly items: T[] = [];
+  constructor(private readonly less: (a: T, b: T) => boolean) {}
+  get size(): number {
+    return this.items.length;
+  }
+  push(item: T): void {
+    const a = this.items;
+    a.push(item);
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (!this.less(a[i], a[p])) break;
+      [a[i], a[p]] = [a[p], a[i]];
+      i = p;
+    }
+  }
+  pop(): T | undefined {
+    const a = this.items;
+    if (a.length === 0) return undefined;
+    const top = a[0];
+    const last = a.pop() as T;
+    if (a.length > 0) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break;
+        [a[i], a[m]] = [a[m], a[i]];
+        i = m;
+      }
+    }
+    return top;
+  }
 }
