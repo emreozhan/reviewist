@@ -297,9 +297,12 @@ function reasonFor(n: Node, placed: Set<string>): string {
       : '';
   let reason: string;
   switch (n.cat) {
-    case '1a':
-      reason = `Sözleşme: ${name} (${main?.change.kind === 'interface' ? (n.file.layer === 'port' ? 'port arayüzü' : 'arayüz') : 'port'}) — ${summary}${subs ? `; ${subs} implementasyonu etkiliyor` : ''}`;
+    case '1a': {
+      const isPort = n.file.layer === 'port';
+      const label = main?.change.kind === 'interface' ? (isPort ? 'port arayüzü' : 'arayüz') : isPort ? 'port' : 'iç arayüz tanımlıyor';
+      reason = `Sözleşme: ${name} (${label}) — ${summary}${subs ? `; ${subs} implementasyonu etkiliyor` : ''}`;
       break;
+    }
     case '1b':
       reason = `Temel sınıf: ${name} soyut sınıfı — ${summary}${subs ? `; ${subs} alt sınıfa yayılıyor` : ''}`;
       break;
