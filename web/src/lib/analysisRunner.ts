@@ -1,5 +1,5 @@
 import type { ReviewJob, ReviewModel, ReviewRequest } from '../../../src/shared/types';
-import type { ReviewApi } from './apiTypes';
+import type { LoadProgress, ReviewApi } from './apiTypes';
 import { ApiRequestError, isMissingEndpoint } from './apiTypes';
 
 export const POLL_INTERVAL_MS = 400;
@@ -8,6 +8,8 @@ export interface AnalysisProgressState {
   /** 'job': sunucu ilerleme bildiriyor; 'sync': eski senkron uç, ilerleme yok. */
   mode: 'job' | 'sync';
   messages: ReviewJob['progress'];
+  /** Sonuç modeli indirilirken/ayrıştırılırken. */
+  download?: LoadProgress;
 }
 
 export interface RunOptions {
@@ -60,7 +62,7 @@ export async function runAnalysis(api: ReviewApi, req: ReviewRequest, opts: RunO
   } catch (error) {
     if (!isMissingEndpoint(error)) throw error;
     opts.onProgress({ mode: 'sync', messages: [] });
-    return api.createReview(req, opts.signal);
+    return api.createReview(req, opts.signal, (download) => opts.onProgress({ mode: 'sync', messages: [], download }));
   }
   let seen = -1;
   for (;;) {
@@ -71,7 +73,8 @@ export async function runAnalysis(api: ReviewApi, req: ReviewRequest, opts: RunO
     if (job.status === 'error') throw jobFailure(job);
     if (job.status === 'done') {
       if (!job.reviewId) throw new ApiRequestError('İş tamamlandı ama review kimliği dönmedi.', { kind: 'parse', endpoint: `/api/jobs/${job.id}` });
-      return api.getReview(job.reviewId);
+      const messages = job.progress;
+      return api.getReview(job.reviewId, { signal: opts.signal, onProgress: (download) => opts.onProgress({ mode: 'job', messages, download }) });
     }
     await wait(POLL_INTERVAL_MS, opts.signal);
     job = await api.getJob(job.id, opts.signal);

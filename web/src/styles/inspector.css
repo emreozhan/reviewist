@@ -306,8 +306,60 @@
   font-size: 9.5px;
 }
 
+.pitem__conf--likely {
+  border-color: color-mix(in srgb, var(--risk-medium) 70%, transparent);
+  background: color-mix(in srgb, var(--risk-medium) 16%, transparent);
+  color: var(--risk-medium);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .pitem__conf--name-only {
+  border-style: dashed;
   color: var(--risk-high);
+}
+
+/* Olası (likely) eşleşme: dikkat çeken kesik çizgili sol kenar — doğrulanması gerekir. */
+.pitem--likely {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--risk-medium) 75%, transparent);
+}
+
+.pitem--name-only {
+  opacity: 0.72;
+}
+
+.prop-tree__likely {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--risk-medium) 16%, transparent);
+  color: var(--risk-medium);
+  font-family: var(--font-gauge);
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.prop-tree__more,
+.prop-tree__unverified {
+  display: block;
+  margin: 4px 0 0 18px;
+  padding: 3px 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.prop-tree__more:hover,
+.prop-tree__unverified:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.prop-tree__unverified {
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .pitem__flag,

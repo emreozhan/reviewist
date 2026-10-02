@@ -13,11 +13,11 @@ import { useRowWindow } from './useRowWindow';
 const COLS = 5;
 
 /** Yan yana diff: sol eski, sağ yeni. Uzun dosyalarda yalnız görünen satırlar çizilir. */
-export function SplitTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, label }: DiffTableProps) {
+export function SplitTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label }: DiffTableProps) {
   const split = useMemo(() => toSplitRows(rows), [rows]);
   const items = useMemo(() => splitItems(split, { oldMap, newMap }), [split, oldMap, newMap]);
   const focusAt = useFocusIndex(items, focus, onFocusMissing);
-  const win = useRowWindow(items, focusAt);
+  const win = useRowWindow(items, focusAt, onFocusDone);
 
   const renderItem = (item: SplitItem, vi: number) => {
     if (item.kind === 'gap') return <GapCell key={item.key} vi={vi} gap={item.gap} colSpan={COLS} onExpand={onExpand} />;

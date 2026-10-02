@@ -4,7 +4,7 @@ import { legacyStorageKey, storageKey } from '../lib/persistence';
 import type { ReviewIndex } from '../lib/reviewIndex';
 import type { RouteParams, Tab } from '../lib/route';
 import { formatHash, parseHash, writeHash } from '../lib/route';
-import { orderedEntries } from '../lib/selectors';
+import { orderedEntries, planView } from '../lib/selectors';
 import { useProgress } from '../state/progressStore';
 import { useUi } from '../state/uiStore';
 
@@ -36,7 +36,8 @@ export function useRouteSelectionSync(review: ReviewModel, index: ReviewIndex, t
     else if (file && params.sym) ui.selectSymbol(params.sym, file);
     else if (file) ui.selectFile(file);
     else if (!useUi.getState().selectedFileId) {
-      const first = orderedEntries(review, index)[0];
+      // Katlı özet bölümlerindeki (kozmetik, düşük riskli Java dışı) dosyalar başlangıç seçimi olmaz.
+      const first = planView(review, index, ui.filters).main[0] ?? orderedEntries(review, index)[0];
       if (first) ui.selectFile(first.file.id);
     }
     if (file && params.view) useUi.getState().setCenterView(params.view);
@@ -60,7 +61,8 @@ export function useRouteSelectionSync(review: ReviewModel, index: ReviewIndex, t
       else if (sym) ui.selectSymbol(sym, file);
       else ui.selectFile(file);
     }
-    const view = params.view ?? null;
+    // Satıra gitme (line) diff görünümünde olur: adreste görünüm yoksa diff varsayılır.
+    const view = params.view ?? (params.line ? 'diff' : null);
     if (view !== useUi.getState().centerView) ui.setCenterView(view);
     const layout = params.layout ?? 'unified';
     if (layout !== useUi.getState().diffLayout) ui.setDiffLayout(layout);

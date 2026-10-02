@@ -8,18 +8,20 @@ import { ExportMenu } from './ExportMenu';
 import { ProgressMeter } from './ProgressMeter';
 import { useReviewCtx } from './ReviewContext';
 import { SummaryChips } from './SummaryChips';
+import { WarningsIndicator } from './WarningsIndicator';
 
 const short = (sha?: string) => (sha ? sha.slice(0, 7) : undefined);
 
 export function TopBar({ tab }: { tab: Tab }) {
-  const { review } = useReviewCtx();
+  const { review, index } = useReviewCtx();
   const setHelpOpen = useUi((s) => s.setHelpOpen);
   const s = review.source;
-  const errors = review.findings.filter((f) => f.severity === 'error').length;
+  const counts = index.findingCounts.total;
+  const errors = counts.error;
   const tabs: { id: Tab; label: string; icon: 'list' | 'graph' | 'flag'; count?: number }[] = [
     { id: 'workspace', label: 'Çalışma alanı', icon: 'list' },
     { id: 'graph', label: 'Etki haritası', icon: 'graph' },
-    { id: 'findings', label: 'Bulgular', icon: 'flag', count: review.findings.length },
+    { id: 'findings', label: 'Bulgular', icon: 'flag', count: counts.error + counts.warning },
   ];
 
   return (
@@ -59,7 +61,7 @@ export function TopBar({ tab }: { tab: Tab }) {
               <Icon name={t.icon} />
               <span className="topbar__tab-label">{t.label}</span>
               {t.count !== undefined && (
-                <span className={`topbar__count${errors > 0 ? ' has-error' : ''}`} title={`${errors} hata`}>
+                <span className={`topbar__count${errors > 0 ? ' has-error' : ''}`} title={`${errors} hata, ${counts.warning} uyarı (${counts.info} bilgi notu ayrıca)`}>
                   {t.count}
                 </span>
               )}
@@ -68,6 +70,7 @@ export function TopBar({ tab }: { tab: Tab }) {
         </nav>
         <div className="topbar__tools">
           <MockBadge />
+          <WarningsIndicator />
           <ExportMenu />
           <ThemeToggle />
           <button type="button" className="icon-btn" onClick={() => setHelpOpen(true)} aria-label="Klavye kısayolları" title="Klavye kısayolları (?)">
@@ -79,16 +82,6 @@ export function TopBar({ tab }: { tab: Tab }) {
         <SummaryChips />
         <ProgressMeter />
       </div>
-      {review.warnings.length > 0 && (
-        <details className="topbar__warnings">
-          <summary>{review.warnings.length} analiz uyarısı</summary>
-          <ul>
-            {review.warnings.map((w) => (
-              <li key={w}>{w}</li>
-            ))}
-          </ul>
-        </details>
-      )}
     </header>
   );
 }

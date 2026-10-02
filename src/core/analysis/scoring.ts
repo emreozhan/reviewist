@@ -4,6 +4,7 @@
 import type { RiskInfo } from '../../shared/types.js';
 import type { JavaFileModel, TypeDiff } from '../java/model.js';
 import type { AnalysisContext, AnalyzedFile } from './context.js';
+import { isMeaningfulImport } from './cosmetic.js';
 import { outsideCallerIds } from './enrich.js';
 import { detectLayer } from './layers.js';
 import { isSemanticChange, scoreJavaFile, scoreMember, scoreNonJavaFile, scoreType } from './risk.js';
@@ -65,7 +66,7 @@ function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
   for (const td of af.typeDiffs) {
     const ch = td.change;
     const owner = td.newType ?? td.oldType;
-    const implementationCount = td.newType ? ctx.index.subTypesOf(ch.id, true).length : ch.subTypes.length;
+    const implementationCount = td.newType ? ctx.index.subTypesOf(ctx.ids.toIndex(ch.id), true).length : ch.subTypes.length;
     const changedSiblingNames = new Set(td.members.filter((m) => isSemanticChange(m.change.status)).map((m) => m.change.name));
     const needsHooks = td.members.some((m) => m.change.status === 'modified' || m.change.status === 'signatureChanged');
     const hookNames = needsHooks && implementationCount > 0 ? hookNamesOf(ctx, td) : undefined;
@@ -78,9 +79,12 @@ function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
         ownerKind: ch.kind,
         ownerVisibility: owner?.visibility ?? ch.visibility,
         implementationCount,
-        outsideCallers: outsideCallerIds(ctx, mc.callers).length,
+        outsideCallers: outsideCallerIds(ctx, mc.callers, 'exact').length,
+        outsideLikelyCallers: outsideCallerIds(ctx, mc.callers, 'likely').length,
         staleCalls: ctx.staleCalls.get(mc.id) ?? [],
         brokenOverrides: ctx.brokenOverrides.get(mc.id) ?? [],
+        orphanedOverrides: ctx.orphanedOverrides.get(mc.id) ?? [],
+        ownerAdded: ch.status === 'added',
         isTest,
         changedSiblingNames,
         hookNames,
@@ -88,7 +92,11 @@ function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
       });
       risks.push(mc.risk);
     }
-    ch.risk = scoreType({ td, memberRisks: risks, isTest, staleTypeRefs: ctx.staleTypeRefs.get(ch.id) ?? [], subTypeCount: implementationCount, architecture: ctx.architecture.get(ch.id) });
+    ch.risk = scoreType({ td, memberRisks: risks, isTest, staleTypeRefs: ctx.staleTypeRefs.get(ch.id) ?? [], subTypeCount: implementationCount,
+      architecture: ctx.architecture.get(ch.id),
+      importRetargets: ctx.importRetargets.get(ch.id),
+      meaningfulImport: isMeaningfulImport,
+    });
     typeRisks.push(ch.risk);
     memberRisks.push(...risks);
   }

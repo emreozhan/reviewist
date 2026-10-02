@@ -30,17 +30,19 @@ export interface DiffTableProps {
   focus?: FocusRequest | null;
   /** Odak satırı tabloda yoksa (kapalı bağlamda) çağrılır. */
   onFocusMissing?: () => void;
+  /** Odak satırına kaydırılıp vurgulandıktan sonra çağrılır (istek temizlenir). */
+  onFocusDone?: (tick: number) => void;
   label: string;
 }
 
 const SIGN = { add: '+', del: '−', context: ' ' } as const;
 const COLS = 5;
 
-export function UnifiedTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, label }: DiffTableProps) {
+export function UnifiedTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label }: DiffTableProps) {
   const segments = useMemo(() => wordSegmentsForRows(rows), [rows]);
   const items = useMemo(() => unifiedItems(rows, { oldMap, newMap }), [rows, oldMap, newMap]);
   const focusAt = useFocusIndex(items, focus, onFocusMissing);
-  const win = useRowWindow(items, focusAt);
+  const win = useRowWindow(items, focusAt, onFocusDone);
 
   const renderItem = (item: UnifiedItem, vi: number) => {
     if (item.kind === 'gap') return <GapCell key={item.key} vi={vi} gap={item.gap} colSpan={COLS} onExpand={onExpand} />;

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { parseJavaFile } from './extract.js';
+import { clearParseCache, closeParsePool, defaultParseConcurrency, parseJavaFiles, parsePoolStats } from './parsePool.js';
 import type { JavaFileModel } from './model.js';
 import { RepoIndex } from './repoIndex.js';
 import { diffJavaFile } from './semanticDiff.js';
@@ -74,5 +75,33 @@ describe('performans', () => {
     expect(changed).toBe(300);
     expect(idx.callersOf('com.acme.m1.Service1#op1(int,List)').length).toBeGreaterThan(0);
     expect(t3 - t0).toBeLessThan(20_000);
+  });
+});
+
+describe('performans: ayrıştırma havuzu + önbellek', () => {
+  afterAll(async () => {
+    await closeParsePool();
+    clearParseCache();
+  });
+
+  it(`${FILE_COUNT} sentetik dosya: tek thread vs havuz vs önbellek`, { timeout: 120_000 }, async () => {
+    clearParseCache();
+    const inputs = Array.from({ length: FILE_COUNT }, (_, i) => ({ ...syntheticFile(i), cacheKey: `blob${i}` }));
+    const t0 = performance.now();
+    const single = await parseJavaFiles(inputs.map(({ path, source }) => ({ path, source })), { concurrency: 1 });
+    const t1 = performance.now();
+    const pooled = await parseJavaFiles(inputs);
+    const t2 = performance.now();
+    const cached = await parseJavaFiles(inputs);
+    const t3 = performance.now();
+    // eslint-disable-next-line no-console
+    console.log(
+      `[perf] ${FILE_COUNT} dosya: tek thread ${(t1 - t0).toFixed(0)} ms, havuz (${defaultParseConcurrency()} işçi, ısınma dahil) ` +
+        `${(t2 - t1).toFixed(0)} ms, önbellek ${(t3 - t2).toFixed(0)} ms; ${JSON.stringify(parsePoolStats())}`,
+    );
+    expect(pooled).toEqual(single);
+    expect(cached).toHaveLength(FILE_COUNT);
+    expect(cached[10]).toBe(pooled[10]);
+    expect(t3 - t2).toBeLessThan((t2 - t1) / 10);
   });
 });

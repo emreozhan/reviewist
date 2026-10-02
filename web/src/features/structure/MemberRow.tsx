@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import type { FileChange, MemberChange } from '../../../../src/shared/types';
 import { PropagationBadges } from '../../components/PropagationBadges';
 import { RiskBadge } from '../../components/RiskBadge';
@@ -15,21 +14,16 @@ interface MemberRowProps {
   file: FileChange;
 }
 
-/** İskelette bir üye: durum, imza farkı, ayrıntılar, risk ve yayılım; seçilince üye odaklı diff açılır. */
+/** İskelette bir üye: durum, imza farkı, ayrıntılar, risk ve yayılım; seçilince üye odaklı diff açılır. Görünür alana getirmeyi liste yapar. */
 export function MemberRow({ member, file }: MemberRowProps) {
   const { index } = useReviewCtx();
   const selected = useUi((s) => s.selectedSymbolId === member.id);
   const selectSymbol = useUi((s) => s.selectSymbol);
-  const ref = useRef<HTMLLIElement>(null);
   const movedTo = member.status === 'moved' && !member.newRange ? index.membersByOldId.get(member.id)?.[0] : undefined;
   const lines = member.newRange ?? member.oldRange;
 
-  useEffect(() => {
-    if (selected) ref.current?.scrollIntoView({ block: 'nearest' });
-  }, [selected]);
-
   return (
-    <li ref={ref} className={`member st-line--${member.status}${selected ? ' is-selected' : ''}${member.status === 'unchanged' ? ' is-unchanged' : ''}`}>
+    <div className={`member st-line--${member.status}${selected ? ' is-selected' : ''}${member.status === 'unchanged' ? ' is-unchanged' : ''}`}>
       <button
         type="button"
         className="member__btn"
@@ -68,6 +62,6 @@ export function MemberRow({ member, file }: MemberRowProps) {
         )}
       </button>
       {selected && member.status !== 'unchanged' && <MemberDiff file={file} member={member} />}
-    </li>
+    </div>
   );
 }

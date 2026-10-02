@@ -21,7 +21,7 @@ const FRAMEWORK_ANNOTATIONS = new Set([
   'JsonProperty', 'JsonIgnore', 'JsonInclude', 'JsonFormat', 'JsonCreator', 'Qualifier', 'Primary', 'Async', 'Cacheable', 'Scheduled', 'EventListener',
 ]);
 
-const SPRING_DATA = new Set(['JpaRepository', 'CrudRepository', 'PagingAndSortingRepository', 'ListCrudRepository', 'MongoRepository', 'ReactiveCrudRepository']);
+const SPRING_DATA = new Set(['JpaRepository', 'CrudRepository', 'PagingAndSortingRepository', 'ListCrudRepository', 'ListPagingAndSortingRepository', 'MongoRepository', 'ReactiveCrudRepository', 'Repository', 'JpaSpecificationExecutor']);
 
 export interface ArchitectureDeps {
   hexagonal: boolean;
@@ -35,7 +35,7 @@ export interface ArchitectureDeps {
 interface Violation {
   key: string;
   rule: string;
-  severity: 'warning' | 'error';
+  severity: 'info' | 'warning' | 'error';
   title: string;
   message: string;
   line?: number;
@@ -111,7 +111,7 @@ function collect(model: JavaFileModel, path: string, deps: ArchitectureDeps): Vi
   if (topTypes.length === 0) return out;
   const fileLayer = typeLayer(topTypes[0], model, path, deps.hexagonal);
   const primary = topTypes[0].fqn;
-  const push = (rule: string, severity: 'warning' | 'error', detail: string, message: string, line: number | undefined, symbolIds: string[]) =>
+  const push = (rule: string, severity: Violation['severity'], detail: string, message: string, line: number | undefined, symbolIds: string[]) =>
     out.push({ key: `${rule}:${symbolIds[0] ?? primary}:${detail}`, rule, severity, title: RULE_TITLES[rule], message, line, symbolIds });
 
   // Import tabanlı kurallar (yalnızca hexagonal düzende anlamlı)
@@ -185,13 +185,22 @@ function collect(model: JavaFileModel, path: string, deps: ArchitectureDeps): Vi
     const repository = !controller && isRepository(t, layer);
     if (controller || repository) {
       const where = controller ? 'controller' : 'repository';
-      if (hasAnn(t.annotations, 'Transactional')) {
+      const typeTx = t.annotations.find((a) => annotationName(a) === 'Transactional');
+      const springDataInterface = t.kind === 'interface' && [...(t.superclass ? [t.superclass] : []), ...t.interfaces].some((x) => SPRING_DATA.has(simpleTypeName(x)));
+      if (typeTx && springDataInterface && /readOnly\s*=\s*true/.test(typeTx)) {
+        push('transactional-layer', 'info', t.fqn, `${t.name} Spring Data repository arayüzü sınıf düzeyinde salt okunur @Transactional kullanıyor (readOnly = true); yaygın bir kalıp.`, t.range.startLine, [t.fqn]);
+      } else if (typeTx) {
         push('transactional-layer', 'warning', t.fqn, `${t.name} (${where}) sınıf düzeyinde @Transactional kullanıyor. Transaction sınırı application service (use case) seviyesinde olmalı.`, t.range.startLine, [t.fqn]);
       }
+      // Spring Data repository arayüzünde salt okunur işlem (readOnly = true) yaygın ve zararsız bir kalıptır: bilgi.
       for (const m of t.members) {
-        if (hasAnn(m.annotations, 'Transactional')) {
-          push('transactional-layer', 'warning', m.id, `${t.name}.${m.name} (${where}) @Transactional kullanıyor. Transaction sınırı application service (use case) seviyesinde olmalı.`, memberLine(m), [m.id]);
+        const tx = m.annotations.find((a) => annotationName(a) === 'Transactional');
+        if (!tx) continue;
+        if (springDataInterface && /readOnly\s*=\s*true/.test(tx)) {
+          push('transactional-layer', 'info', m.id, `${t.name}.${m.name} Spring Data repository arayüzünde salt okunur @Transactional kullanıyor (readOnly = true); yaygın bir kalıp, transaction sınırı yine de servis katmanında tanımlanmalı.`, memberLine(m), [m.id]);
+          continue;
         }
+        push('transactional-layer', 'warning', m.id, `${t.name}.${m.name} (${where}) @Transactional kullanıyor. Transaction sınırı application service (use case) seviyesinde olmalı.`, memberLine(m), [m.id]);
       }
     }
 

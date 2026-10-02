@@ -128,3 +128,100 @@ export function referencedSimpleNames(text: string): string[] {
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Kaynak kökü / test yolu
+// ---------------------------------------------------------------------------
+
+/** Paket yolunun yaygın ilk segmentleri (paket adı bilinmediğinde kaynak kökü sezgisi için). */
+const PACKAGE_HEADS = new Set([
+  'com', 'org', 'net', 'io', 'java', 'javax', 'jakarta', 'edu', 'gov', 'de', 'fr', 'uk', 'nl', 'ch', 'jp', 'cn',
+  'ru', 'it', 'es', 'br', 'tr', 'dev', 'app', 'me', 'info', 'co', 'sun', 'kotlin', 'scala', 'groovy', 'android',
+]);
+
+/**
+ * Bir .java dosyasının kaynak kökü: paket dizin yolundan önceki önek (`/` ayraçlı, sonda `/` yok; kök dizindeyse '').
+ *  - `packageName` verilirse kesin: 'android/guava/src/com/google/common/base/X.java' + 'com.google.common.base'
+ *    -> 'android/guava/src'. Dizin paket yoluyla bitmiyorsa dosyanın dizini döner.
+ *  - Verilmezse sezgisel: dizindeki SON `src/main/java` benzeri `java` segmentinden sonrası (`.../src/main/java`)
+ *    ya da yaygın paket başı segmentinin (com, org, net, io, ...) SON geçtiği yerden öncesi; hiçbiri yoksa dosyanın dizini.
+ *    (Son geçiş kuralı GWT `super/com/...` düzeninde de doğru kökü verir.)
+ * JavaFileModel elinde olan çağıranlar `packageName`i geçmelidir; RepoIndex aday seçiminde her zaman paket adını kullanır.
+ */
+export function sourceRootOf(path: string, packageName?: string): string {
+  const norm = path.replace(/\\/g, '/');
+  const slash = norm.lastIndexOf('/');
+  const dir = slash >= 0 ? norm.slice(0, slash) : '';
+  if (packageName !== undefined) {
+    if (packageName === '') return dir;
+    const pkgPath = packageName.replace(/\./g, '/');
+    if (dir === pkgPath) return '';
+    if (dir.endsWith(`/${pkgPath}`)) return dir.slice(0, dir.length - pkgPath.length - 1);
+    return dir;
+  }
+  const segs = dir ? dir.split('/') : [];
+  for (let i = segs.length - 1; i >= 1; i--) {
+    if (segs[i] === 'java' && (segs[i - 1] === 'main' || segs[i - 1] === 'test')) return segs.slice(0, i + 1).join('/');
+  }
+  for (let i = segs.length - 1; i >= 0; i--) {
+    if (PACKAGE_HEADS.has(segs[i] as string)) return segs.slice(0, i).join('/');
+  }
+  return dir;
+}
+
+/** Test kaynağı mı: `src/test/` veya herhangi bir `test`/`tests` dizini altında ya da dosya adı `*Test*.java`. */
+export function isTestPath(path: string): boolean {
+  const norm = `/${path.replace(/\\/g, '/')}`;
+  if (/\/(?:test|tests|testFixtures|it|integrationTest)\//.test(norm)) return true;
+  return /Test[^/]*\.java$/.test(norm.slice(norm.lastIndexOf('/') + 1));
+}
+
+// ---------------------------------------------------------------------------
+// Tip değişkeni normalizasyonu (B9)
+// ---------------------------------------------------------------------------
+
+const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+
+/**
+ * Tip değişkenlerini pozisyonel yer tutuculara çevirir: `names[i]` -> `${prefix}${i}`.
+ * Yalnız önünde '.' olmayan tam tanımlayıcılar değişir ('a.T' dokunulmaz). String/char literal içleri atlanır.
+ */
+export function renameTypeVars(text: string, map: ReadonlyMap<string, string>): string {
+  if (map.size === 0 || !text) return text;
+  let out = '';
+  let last = 0;
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] as string;
+    if (ch === '"' || ch === "'") {
+      let k = i + 1;
+      while (k < text.length && text[k] !== ch) k += text[k] === '\\' ? 2 : 1;
+      i = k + 1;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch) && (i === 0 || !/[\w$]/.test(text[i - 1] as string))) {
+      IDENT_RE.lastIndex = i;
+      const m = IDENT_RE.exec(text);
+      const word = m ? m[0] : ch;
+      const rep = map.get(word);
+      let j = i - 1;
+      while (j >= 0 && /\s/.test(text[j] as string)) j--;
+      if (rep !== undefined && text[j] !== '.') {
+        out += text.slice(last, i) + rep;
+        last = i + word.length;
+      }
+      i += word.length;
+      continue;
+    }
+    i++;
+  }
+  return out + text.slice(last);
+}
+
+/** Pozisyonel tip değişkeni haritası: sınıf (dıştan içe) önce `§C<i>`, metot değişkenleri `§M<i>` (gölgeleme: metot kazanır). */
+export function typeVarMap(classVars: readonly string[], methodVars: readonly string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  classVars.forEach((v, i) => map.set(v, `§C${i}`));
+  methodVars.forEach((v, i) => map.set(v, `§M${i}`));
+  return map;
+}

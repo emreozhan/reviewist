@@ -18,7 +18,7 @@ import {
   createSideResolver,
   filterByExt,
   githubStableKey,
-  isBinaryBuffer,
+  isBinaryContent,
   LruCache,
   resolveInside,
   sanitizeRepoRelPath,
@@ -268,6 +268,8 @@ const prFileSchema = z.object({
   changes: z.number().default(0),
   patch: z.string().optional(),
   previous_filename: z.string().optional(),
+  /** Yeni taraftaki blob SHA'sı (silinen dosyada eski blob olabilir; kullanılmaz). */
+  sha: z.string().nullable().optional(),
 });
 type GhPrFile = z.infer<typeof prFileSchema>;
 
@@ -475,6 +477,11 @@ async function createApiChangeSet(
   }
   const files = ghFiles.map(mapPrFile);
   const sideOf = createSideResolver(files);
+  // Yeni taraf blob SHA'ları (API dosya listesindeki `sha`); silinen dosyalarınki alınmaz.
+  const newBlobIds = new Map<string, string>();
+  for (const f of ghFiles) {
+    if (f.status !== 'removed' && f.sha && /^[0-9a-f]{40,64}$/.test(f.sha)) newBlobIds.set(f.filename, f.sha);
+  }
 
   // --- içerik okuma -------------------------------------------------------
   const limit = createLimiter(8);
@@ -512,7 +519,7 @@ async function createApiChangeSet(
           }
           buf = Buffer.from(await res.arrayBuffer());
         }
-        const text = isBinaryBuffer(buf) ? null : buf.toString('utf8');
+        const text = isBinaryContent(buf, path) ? null : buf.toString('utf8');
         cache.set(key, text);
         return text === null ? undefined : text;
       } finally {
@@ -653,6 +660,15 @@ async function createApiChangeSet(
       tarball ??= loadTarball();
       const t = await tarball;
       return filterByExt(t ? t.paths : changedNewPaths(), ext);
+    },
+    async blobId(side, rawPath) {
+      // Yalnız PR'da değişen dosyaların yeni tarafı bilinir; eski taraf ve tarball'daki diğer dosyalar undefined.
+      if (side === 'old') return undefined;
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
+      const t = sideOf('new', path);
+      if (t.path === undefined || t.binary) return undefined;
+      return newBlobIds.get(t.path);
     },
     dispose() {
       disposed = true;

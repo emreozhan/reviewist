@@ -10,12 +10,19 @@
  *  - taşıma: taşınan üye (status 'moved') ile eski sahibinin üyeleri arasındaki kenarlar (eski sahibin taşınan metodu
  *    çağırması gibi) birleştirici sayılmaz; taşıma kendi hikâyesi olur ("validate PlaceOrderService → OrderValidator taşındı").
  * Test sembolleri köprü olmaz; her test tipi ilgili tek bir üretim hikâyesine bağlanır ve grubun sonunda listelenir.
+ * Hub semboller (equals/hashCode/toString/compareTo ya da ≥ HUB_DEGREE farklı tipten komşusu olanlar) tipler arası köprü
+ * olmaz; yalnız kendi tipinin hikâyesinde kalır. MAX_GROUP_SYMBOLS'u aşan bileşenler paket bazında (gerekirse paket
+ * içinde tip sınırında) bölünür; başlıkta paket ve bölüm belirtilir.
  * Tek elemanlı düşük/orta riskli bileşenler "Diğer küçük değişiklikler", kozmetikler "Biçimsel değişiklikler" grubunda toplanır.
  */
 import type { CallRef, ChangeGroup, FileChange, MemberChange, RiskInfo, RiskLevel } from '../../shared/types.js';
 import type { TypeDiff } from '../java/model.js';
 import { isBreakingSignature, isSemanticChange } from './risk.js';
 import { maxLevel, RISK_LEVEL_ORDER, simpleTypeName, symbolLabel } from './util.js';
+
+export const MAX_GROUP_SYMBOLS = 40;
+export const HUB_DEGREE = 15;
+const HUB_NAMES = new Set(['equals', 'hashCode', 'toString', 'compareTo']);
 
 class UnionFind {
   private readonly parent = new Map<string, string>();
@@ -129,6 +136,61 @@ function describe(symbols: Sym[], files: string[]): string {
   return `${symbols.length} değişen sembol, ${files.length} dosya: ${labels.join(', ')}${symbols.length > 6 ? ` ve ${symbols.length - 6} sembol daha` : ''}.`;
 }
 
+function packageOfSym(s: Sym): string {
+  return (s.td.newFile ?? s.td.oldFile)?.packageName ?? '';
+}
+
+/**
+ * MAX_GROUP_SYMBOLS'u aşan bileşeni paket bazında böler; paket parçası da büyükse tip sınırında sıralı parçalara ayırır
+ * (sınırı tek başına aşan tipin üyeleri riske göre dilimlenir). Küçük bileşen tek parça döner (part undefined).
+ */
+function splitComponent(symbols: Sym[]): { symbols: Sym[]; part?: string }[] {
+  if (symbols.length <= MAX_GROUP_SYMBOLS) return [{ symbols }];
+  const byPkg = new Map<string, Sym[]>();
+  for (const s of symbols) {
+    const pkg = packageOfSym(s);
+    const list = byPkg.get(pkg);
+    if (list) list.push(s);
+    else byPkg.set(pkg, [s]);
+  }
+  const out: { symbols: Sym[]; part?: string }[] = [];
+  const pkgs = [...byPkg.keys()].sort();
+  for (const pkg of pkgs) {
+    const list = byPkg.get(pkg) as Sym[];
+    const label = pkg ? `paket ${pkg}` : 'varsayılan paket';
+    if (list.length <= MAX_GROUP_SYMBOLS) {
+      out.push({ symbols: list, part: label });
+      continue;
+    }
+    // Tip sınırında parçalara ayır (tipin üyeleri birlikte kalır)
+    const byType = new Map<string, Sym[]>();
+    for (const s of list) {
+      const t = byType.get(s.typeId);
+      if (t) t.push(s);
+      else byType.set(s.typeId, [s]);
+    }
+    const chunks: Sym[][] = [];
+    let cur: Sym[] = [];
+    for (const typeId of [...byType.keys()].sort()) {
+      const members = byType.get(typeId) as Sym[];
+      if (cur.length > 0 && cur.length + members.length > MAX_GROUP_SYMBOLS) {
+        chunks.push(cur);
+        cur = [];
+      }
+      // Tek tip sınırı aşıyorsa üyeleri (riske göre sıralı) dilimlenir.
+      if (members.length > MAX_GROUP_SYMBOLS) {
+        const sorted = [...members].sort((x, y) => y.risk.score - x.risk.score || x.id.localeCompare(y.id));
+        for (let i = 0; i < sorted.length; i += MAX_GROUP_SYMBOLS) chunks.push(sorted.slice(i, i + MAX_GROUP_SYMBOLS));
+        continue;
+      }
+      cur.push(...members);
+    }
+    if (cur.length) chunks.push(cur);
+    chunks.forEach((c, i) => out.push({ symbols: c, part: chunks.length > 1 ? `${label}, bölüm ${i + 1}/${chunks.length}` : label }));
+  }
+  return out;
+}
+
 /** Grupları üretir ve MemberChange.groupId alanlarını doldurur. */
 export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly FileChange[], staleCalls: ReadonlyMap<string, readonly CallRef[]> = new Map()): ChangeGroup[] {
   const syms = new Map<string, Sym>();
@@ -171,30 +233,54 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
     const from = movedFrom(x?.mc);
     return from !== undefined && y?.typeId === from;
   };
-  const prodEdge = (a: string, b: string) => {
+  type EdgeKind = 'call' | 'override' | 'type';
+  const edges: [string, string, EdgeKind][] = [];
+  const neighbors = new Map<string, Set<string>>();
+  const prodEdge = (a: string, b: string, kind: EdgeKind) => {
     const sa = syms.get(a);
     const sb = syms.get(b);
-    if (sa?.isTest || sb?.isTest) return;
+    if (!sa || !sb || a === b) return;
+    if (sa.isTest || sb.isTest) return;
     if (isMoveEdge(sa, sb) || isMoveEdge(sb, sa)) return;
-    uf.union(a, b);
+    edges.push([a, b, kind]);
+    if (sa.typeId === sb.typeId || kind !== 'call') return;
+    for (const [x, y] of [[a, sb.typeId], [b, sa.typeId]] as const) {
+      const set = neighbors.get(x);
+      if (set) set.add(y);
+      else neighbors.set(x, new Set([y]));
+    }
   };
   for (const s of syms.values()) {
     if (!s.mc) continue;
     for (const c of s.mc.callees) {
       const callee = syms.get(c);
-      if (callee?.mc && isApiChange(callee.mc)) prodEdge(s.id, c);
+      if (callee?.mc && isApiChange(callee.mc)) prodEdge(s.id, c, 'call');
     }
-    if (isApiChange(s.mc)) for (const c of s.mc.callers) if (syms.has(c.fromId)) prodEdge(s.id, c.fromId);
-    for (const o of s.mc.overrides) if (syms.has(o)) prodEdge(s.id, o);
-    for (const o of s.mc.overriddenBy) if (syms.has(o)) prodEdge(s.id, o);
+    if (isApiChange(s.mc)) for (const c of s.mc.callers) if (syms.has(c.fromId)) prodEdge(s.id, c.fromId, 'call');
+    for (const o of s.mc.overrides) if (syms.has(o)) prodEdge(s.id, o, 'override');
+    for (const o of s.mc.overriddenBy) if (syms.has(o)) prodEdge(s.id, o, 'override');
   }
   for (const td of tdById.values()) {
     const rep = typeRep.get(td.change.id);
     if (!rep) continue;
     for (const sup of td.change.superTypes) {
       const other = typeRep.get(sup);
-      if (other) prodEdge(rep, other);
+      if (other) prodEdge(rep, other, 'type');
     }
+  }
+  // Hub semboller köprü olmaz: equals/hashCode/toString/compareTo hiçbir tipler arası kenarda; çok çağrılan/çağıran
+  // (≥ HUB_DEGREE farklı tipte komşu) semboller çağrı kenarlarında birleştirmez. Override (sözleşme → implementasyon)
+  // ve tip düzeyi kalıtım kenarları gerçek hikâyedir; büyürse boyut sınırıyla bölünür.
+  const nameHub = (id: string) => {
+    const name = syms.get(id)?.mc?.name;
+    return name !== undefined && HUB_NAMES.has(name);
+  };
+  const degreeHub = (id: string) => (neighbors.get(id)?.size ?? 0) >= HUB_DEGREE;
+  for (const [a, b, kind] of edges) {
+    const crossType = syms.get(a)?.typeId !== syms.get(b)?.typeId;
+    if (crossType && kind !== 'type' && (nameHub(a) || nameHub(b))) continue;
+    if (crossType && kind === 'call' && (degreeHub(a) || degreeHub(b))) continue;
+    uf.union(a, b);
   }
   // Test tipleri, çağırdıkları en riskli değişen üretim sembolünün grubuna eklenir (tek bağlantı).
   const testTypes = new Map<string, Sym[]>();
@@ -229,25 +315,28 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
 
   const groups: (ChangeGroup & { score: number })[] = [];
   const small: Sym[] = [];
-  for (const symbols of comps.values()) {
-    // Üretim sembolleri önce (riske göre), testler sonda.
-    symbols.sort((a, b) => Number(a.isTest) - Number(b.isTest) || b.risk.score - a.risk.score || a.id.localeCompare(b.id));
-    const level = maxLevel(symbols.map((s) => s.risk.level));
-    if (symbols.length === 1 && RISK_LEVEL_ORDER[level] < RISK_LEVEL_ORDER.high) {
-      small.push(symbols[0]);
-      continue;
+  for (const component of comps.values()) {
+    for (const { symbols, part } of splitComponent(component)) {
+      // Üretim sembolleri önce (riske göre), testler sonda.
+      symbols.sort((a, b) => Number(a.isTest) - Number(b.isTest) || b.risk.score - a.risk.score || a.id.localeCompare(b.id));
+      const level = maxLevel(symbols.map((s) => s.risk.level));
+      if (symbols.length === 1 && RISK_LEVEL_ORDER[level] < RISK_LEVEL_ORDER.high) {
+        small.push(symbols[0]);
+        continue;
+      }
+      const anchor = [...symbols].sort(compareRank)[0];
+      const fileIds = [...new Set(symbols.map((s) => s.file))].sort();
+      const title = groupTitle(anchor, symbols, tdById, staleCalls);
+      groups.push({
+        id: `group:${anchor.id}`,
+        title: part ? `${title} — ${part}` : title,
+        description: part ? `${describe(symbols, fileIds)} Büyük hikâye (${component.length} sembol) ${MAX_GROUP_SYMBOLS} sembollük parçalara bölündü: ${part}.` : describe(symbols, fileIds),
+        symbolIds: symbols.map((s) => s.id),
+        fileIds,
+        riskLevel: level,
+        score: Math.max(...symbols.map((s) => s.risk.score)),
+      });
     }
-    const anchor = [...symbols].sort(compareRank)[0];
-    const fileIds = [...new Set(symbols.map((s) => s.file))].sort();
-    groups.push({
-      id: `group:${anchor.id}`,
-      title: groupTitle(anchor, symbols, tdById, staleCalls),
-      description: describe(symbols, fileIds),
-      symbolIds: symbols.map((s) => s.id),
-      fileIds,
-      riskLevel: level,
-      score: Math.max(...symbols.map((s) => s.risk.score)),
-    });
   }
   groups.sort((a, b) => RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || b.score - a.score || b.symbolIds.length - a.symbolIds.length || a.title.localeCompare(b.title));
   const out: ChangeGroup[] = groups.map(({ score: _score, ...g }) => g);

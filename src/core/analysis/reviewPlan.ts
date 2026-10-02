@@ -215,16 +215,41 @@ export function buildReviewPlan(files: readonly FileChange[], typeDiffsByFile: R
 
 const TEST_STEM_RE = /^(?:Test(?=[A-Z]))?(\w+?)(?:Test|Tests|IT|ITCase|IntegrationTest|Spec)?$/;
 
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Test kodunda üretim düğümünün (değişen) tip adlarının geçme sayısı. */
+function referenceCount(test: Node, prodNode: Node): number {
+  const code = test.tds.map((td) => td.newFile ?? td.oldFile).find((m) => m !== undefined)?.normalizedCode ?? '';
+  if (!code) return 0;
+  const names = new Set(semanticTypes(prodNode.tds).map((td) => td.change.name));
+  if (names.size === 0) for (const td of prodNode.tds) names.add(td.change.name);
+  let n = 0;
+  for (const name of names) n += code.match(new RegExp(`\\b${escapeRe(name)}\\b`, 'g'))?.length ?? 0;
+  return n;
+}
+
 /**
- * Her testi okunacağı üretim dosyasına bağlar: önce ad kalıbı (FooTest → Foo), yoksa testi ilişkili sayan
- * üretim dosyalarından plandaki en sonuncusu (test, kullandığı tüm değişikliklerden sonra okunur).
+ * Her testi okunacağı üretim dosyasına bağlar:
+ *  1. ad kalıbı (FooTest → Foo),
+ *  2. en uzun önek (BitMapExtractorFromLongArrayTest → BitMapExtractor; önekten sonra büyük harf/rakam),
+ *  3. testi ilişkili sayan üretim dosyası tekse o; birden çoksa testte en çok referans verilen değişen tip (açık fark
+ *     yoksa bağlanmaz — uydurma eşleşme yapılmaz; test, eşleşmeyen testler arasında listelenir).
  */
 function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string, string> {
   const byStem = new Map<string, string>();
   for (const n of prod) byStem.set(basename(n.file.path).replace(/\.\w+$/, ''), n.file.path);
-  // test yolu → onu ilişkili sayan üretim dosyalarından plandaki en sonuncusu
-  const lastRelated = new Map<string, string>();
-  for (const n of prod) for (const tp of n.file.relatedTestFiles) lastRelated.set(tp, n.file.path);
+  const byPath = new Map(prod.map((n) => [n.file.path, n]));
+  // test yolu → onu ilişkili sayan üretim dosyaları
+  const related = new Map<string, string[]>();
+  for (const n of prod) {
+    for (const tp of n.file.relatedTestFiles) {
+      const list = related.get(tp);
+      if (list) list.push(n.file.path);
+      else related.set(tp, [n.file.path]);
+    }
+  }
   const out = new Map<string, string>();
   for (const t of tests) {
     const stem = basename(t.file.path).replace(/\.\w+$/, '');
@@ -234,8 +259,26 @@ function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string,
       out.set(t.file.path, byName);
       continue;
     }
-    const related = lastRelated.get(t.file.path);
-    if (related !== undefined) out.set(t.file.path, related);
+    if (subject) {
+      let best: string | undefined;
+      for (const s of byStem.keys()) {
+        if (s.length < 4 || s.length >= subject.length || !subject.startsWith(s) || !/[A-Z0-9_]/.test(subject[s.length])) continue;
+        if (!best || s.length > best.length) best = s;
+      }
+      if (best) {
+        out.set(t.file.path, byStem.get(best) as string);
+        continue;
+      }
+    }
+    const cands = related.get(t.file.path) ?? [];
+    if (cands.length === 1) {
+      out.set(t.file.path, cands[0]);
+      continue;
+    }
+    if (cands.length > 1) {
+      const scored = cands.map((p) => ({ p, n: referenceCount(t, byPath.get(p) as Node) })).sort((a, b) => b.n - a.n || a.p.localeCompare(b.p));
+      if (scored[0].n > 0 && scored[0].n > (scored[1]?.n ?? 0)) out.set(t.file.path, scored[0].p);
+    }
   }
   return out;
 }
@@ -264,7 +307,11 @@ function reasonFor(n: Node, placed: Set<string>): string {
       reason = `Domain modeli: ${name} — ${summary}${depPhrase}`;
       break;
     case '2':
-      reason = n.tds.length === 0 ? `İçerik analiz edilemedi; diff'i elle inceleyin` : `Bağımlılık sırası: ${name} — ${summary}${depPhrase}`;
+      if (n.tds.length > 0) reason = `Bağımlılık sırası: ${name} — ${summary}${depPhrase}`;
+      else if (/(^|\/)(package-info|module-info)\.java$/.test(n.file.path)) {
+        const top = [...n.file.risk.reasons].sort((a, b) => b.weight - a.weight)[0];
+        reason = `Paket/modül bildirimi: ${basename(n.file.path)}${top ? ` — ${top.message}` : ''}`;
+      } else reason = `İçerik analiz edilemedi; diff'i elle inceleyin`;
       break;
     case '3':
       reason = `Adapter (${n.file.layer}): ${name} — ${summary}${depPhrase}`;

@@ -8,6 +8,8 @@ import { SourceError } from './errors.js';
 import {
   createGitChangeSet,
   createWorktreeChangeSet,
+  crlfActionFor,
+  parseLsTree,
   getGitRefs,
   GitBlobReader,
   resolveRepoRoot,
@@ -350,5 +352,165 @@ describe('stableKey, diff dışı dosyalar, hata alanları, ilerleme', () => {
       field: 'head',
     });
     await expect(createWorktreeChangeSet({ repoPath: repo, base: 'yok' })).rejects.toMatchObject({ field: 'base' });
+  });
+});
+
+describe('Tur 3: longpaths, blobId, CRLF (B12), NUL içeren .java', () => {
+  it('tüm git çağrılarında core.longpaths=true', async () => {
+    const repo = makeRepo();
+    expect((await runGit(repo, ['config', '--get', 'core.longpaths'])).trim()).toBe('true');
+  });
+
+  it('parseLsTree: blob ve gitlink ayrımı, boşluklu yol', () => {
+    const sha = 'a'.repeat(40);
+    const sub = 'b'.repeat(40);
+    const t = parseLsTree([`100644 blob ${sha}\tsrc/A B.java`, `160000 commit ${sub}\tvendor/lib`, ''].join('\u0000'));
+    expect(t.paths).toEqual(['src/A B.java', 'vendor/lib']);
+    expect([...t.blobs]).toEqual([['src/A B.java', sha]]);
+  });
+
+  it("blobId (git aralığı): ls-tree SHA'ları, rename/ekleme/silme eşlemesi", async () => {
+    const repo = makeRepo();
+    write(repo, 'A.java', javaClass('p', 'A'));
+    write(repo, 'Old.java', javaClass('p', 'Old', '  // gövde satırı benzerlik için yeterince uzun olsun\n'.repeat(5)));
+    write(repo, 'Gone.java', 'class Gone {}\n');
+    write(repo, 'Same.java', 'class Same {}\n');
+    commitAll(repo, 'c1');
+    git(repo, 'checkout', '-q', '-b', 'f');
+    write(repo, 'A.java', javaClass('p', 'A', '  int x;\n'));
+    git(repo, 'mv', 'Old.java', 'New.java');
+    rmSync(join(repo, 'Gone.java'));
+    write(repo, 'Added.java', 'class Added {}\n');
+    commitAll(repo, 'c2');
+    const sha = (rev: string): string => git(repo, 'rev-parse', rev).trim();
+
+    const cs = track(await createGitChangeSet({ repoPath: repo, base: 'main', head: 'f' }));
+    expect(cs.blobId).toBeDefined();
+    const blobId = (side: 'old' | 'new', p: string): Promise<string | undefined> =>
+      cs.blobId ? cs.blobId(side, p) : Promise.resolve(undefined);
+    expect(await blobId('new', 'A.java')).toBe(sha('f:A.java'));
+    expect(await blobId('old', 'A.java')).toBe(sha('main:A.java'));
+    expect(await blobId('old', 'A.java')).not.toBe(await blobId('new', 'A.java'));
+    expect(await blobId('old', 'New.java')).toBe(sha('main:Old.java'));
+    expect(await blobId('new', 'Old.java')).toBeUndefined();
+    expect(await blobId('new', 'Gone.java')).toBeUndefined();
+    expect(await blobId('old', 'Added.java')).toBeUndefined();
+    expect(await blobId('new', 'Same.java')).toBe(await blobId('old', 'Same.java')); // diff dışı
+    expect(await blobId('new', '../dışarı')).toBeUndefined();
+    expect((await cs.listFiles('new', '.java')).sort()).toEqual(['A.java', 'Added.java', 'New.java', 'Same.java']);
+  });
+
+  it("blobId (çalışma ağacı): eski taraf taban blob'u, yeni taraf undefined", async () => {
+    const repo = makeRepo();
+    write(repo, 'A.java', 'class A {}\n');
+    commitAll(repo, 'c1');
+    write(repo, 'A.java', 'class A { int x; }\n');
+    const cs = track(await createWorktreeChangeSet({ repoPath: repo }));
+    expect(await cs.blobId?.('old', 'A.java')).toBe(git(repo, 'rev-parse', 'HEAD:A.java').trim());
+    expect(await cs.blobId?.('new', 'A.java')).toBeUndefined();
+  });
+
+  it('crlfActionFor: git convert_attrs kuralları', () => {
+    expect(crlfActionFor({}, 'false')).toBe('none');
+    expect(crlfActionFor({}, 'true')).toBe('auto');
+    expect(crlfActionFor({}, 'input')).toBe('auto');
+    expect(crlfActionFor({ text: 'unset' }, 'true')).toBe('none');
+    expect(crlfActionFor({ text: 'set' }, 'false')).toBe('text');
+    expect(crlfActionFor({ text: 'auto' }, 'false')).toBe('auto');
+    expect(crlfActionFor({ text: 'auto', eol: 'crlf' }, 'false')).toBe('auto');
+    expect(crlfActionFor({ text: 'unspecified', eol: 'lf' }, 'false')).toBe('text');
+    expect(crlfActionFor({ text: 'unset', eol: 'lf' }, 'true')).toBe('none');
+    expect(crlfActionFor({ crlf: 'input' }, 'false')).toBe('text');
+    expect(crlfActionFor({ crlf: 'unset' }, 'true')).toBe('none');
+  });
+
+  /** LF blob + core.autocrlf=true + diskte CRLF ve tek satır değişikliği (QA B12 senaryosu). */
+  function crlfRepo(attrs?: string): { repo: string; lines: string[] } {
+    const repo = makeRepo();
+    const lines = Array.from({ length: 30 }, (_, i) => `  int f${i} = ${i};`);
+    if (attrs !== undefined) write(repo, '.gitattributes', attrs);
+    write(repo, 'src/A.java', `class A {\n${lines.join('\n')}\n}\n`);
+    commitAll(repo, 'c1');
+    git(repo, 'config', 'core.autocrlf', 'true');
+    const changed = [...lines];
+    changed[14] = '  int f14 = 1400;';
+    write(repo, 'src/A.java', `class A {\n${changed.join('\n')}\n}\n`.replace(/\n/g, '\r\n'));
+    write(repo, 'src/Other.java', 'class Other {\r\n}\r\n'); // izlenmeyen, CRLF
+    return { repo, lines: changed };
+  }
+
+  it("B12: core.autocrlf=true + CRLF disk → diff 1 satır, readFile git'in LF görünümü, satır no uyumlu", async () => {
+    const { repo, lines } = crlfRepo();
+    const cs = track(await createWorktreeChangeSet({ repoPath: repo }));
+    const f = cs.files.find((x) => x.path === 'src/A.java');
+    expect(f).toMatchObject({ status: 'modified', additions: 1, deletions: 1 });
+    const text = await cs.readFile('new', 'src/A.java');
+    expect(text).toBeDefined();
+    expect(text).not.toContain('\r');
+    expect(text).toBe(`class A {\n${lines.join('\n')}\n}\n`);
+    const oldText = await cs.readFile('old', 'src/A.java');
+    expect(oldText).not.toContain('\r');
+    // eski ve yeni yalnız değişen satırda farklı (kozmetik gürültü yok)
+    const n = (text ?? '').split('\n');
+    const o = (oldText ?? '').split('\n');
+    expect(n.length).toBe(o.length);
+    expect(n.filter((l, i) => l !== o[i])).toEqual(['  int f14 = 1400;']);
+    // hunk satır numaraları readFile satırlarıyla örtüşür
+    let checked = 0;
+    for (const h of f?.hunks ?? []) {
+      for (const l of h.lines) {
+        if (l.newNo !== undefined) expect(n[l.newNo - 1]).toBe(l.text);
+        if (l.oldNo !== undefined) expect(o[l.oldNo - 1]).toBe(l.text);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(5);
+    // izlenmeyen CRLF dosya da (indekste yok, auto) LF olarak okunur
+    expect(await cs.readFile('new', 'src/Other.java')).toBe('class Other {\n}\n');
+  });
+
+  it('B12: .gitattributes -text ya da core.autocrlf=false ise CRLF korunur (git diff ile tutarlı)', async () => {
+    const { repo } = crlfRepo('*.java -text\n');
+    const cs = track(await createWorktreeChangeSet({ repoPath: repo }));
+    expect(cs.files.find((x) => x.path === 'src/A.java')?.additions).toBe(32); // git tüm satırları değişmiş görür
+    expect(await cs.readFile('new', 'src/A.java')).toContain('\r\n');
+
+    const r2 = crlfRepo();
+    git(r2.repo, 'config', 'core.autocrlf', 'false');
+    const cs2 = track(await createWorktreeChangeSet({ repoPath: r2.repo }));
+    expect(await cs2.readFile('new', 'src/A.java')).toContain('\r\n');
+  });
+
+  it('B12: indeksteki sürüm CRLF ise (auto) dönüştürülmez; eol=lf ise her zaman dönüştürülür', async () => {
+    const repo = makeRepo();
+    write(repo, 'A.java', 'class A {\r\n  int x;\r\n}\r\n');
+    write(repo, 'B.java', 'class B {\r\n  int x;\r\n}\r\n');
+    write(repo, '.gitattributes', 'B.java eol=lf\n');
+    commitAll(repo, 'c1'); // autocrlf=false: A.java blob'u CRLF; B.java eol=lf ile LF olarak girer
+    git(repo, 'config', 'core.autocrlf', 'true');
+    write(repo, 'A.java', 'class A {\r\n  int y;\r\n}\r\n');
+    write(repo, 'B.java', 'class B {\r\n  int y;\r\n}\r\n');
+    const cs = track(await createWorktreeChangeSet({ repoPath: repo }));
+    expect(await cs.readFile('new', 'A.java')).toBe('class A {\r\n  int y;\r\n}\r\n');
+    expect(await cs.readFile('old', 'A.java')).toBe('class A {\r\n  int x;\r\n}\r\n');
+    expect(await cs.readFile('new', 'B.java')).toBe('class B {\n  int y;\n}\n');
+  });
+
+  it('NUL içeren .java (ör. fuzz testi) diff dışında okunabilir; gerçek ikili okunmaz', async () => {
+    const repo = makeRepo();
+    const fuzz = `class Fuzz {\n  String s = "${'\u0000a\u0000'.repeat(200)}";\n}\n`;
+    write(repo, 'src/Fuzz.java', fuzz);
+    write(repo, 'src/data.bin', Buffer.from([0, 1, 2, 0, 3]));
+    write(repo, 'src/A.java', 'class A {}\n');
+    commitAll(repo, 'c1');
+    git(repo, 'checkout', '-q', '-b', 'f');
+    write(repo, 'src/A.java', 'class A { int x; }\n');
+    commitAll(repo, 'c2');
+    const cs = track(await createGitChangeSet({ repoPath: repo, base: 'main', head: 'f' }));
+    expect(await cs.readFile('new', 'src/Fuzz.java')).toBe(fuzz);
+    expect(await cs.readFile('old', 'src/Fuzz.java')).toBe(fuzz);
+    expect(await cs.readFile('new', 'src/data.bin')).toBeUndefined();
+    const wt = track(await createWorktreeChangeSet({ repoPath: repo }));
+    expect(await wt.readFile('new', 'src/Fuzz.java')).toBe(fuzz);
   });
 });

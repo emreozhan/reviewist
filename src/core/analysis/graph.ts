@@ -19,6 +19,8 @@ export interface GraphInput {
   /** Diff dışı düğümün katmanı. */
   layerOf: (path: string | undefined, typeFqn: string | undefined) => Layer;
   maxNodes?: number;
+  /** Model id → indeks id (çift FQN '@kök' soneki). Verilmezse aynen. */
+  toIndexId?: (id: string) => string;
 }
 
 export interface GraphResult {
@@ -29,6 +31,7 @@ export interface GraphResult {
 }
 
 export function buildGraph(input: GraphInput): GraphResult {
+  const toIdx = input.toIndexId ?? ((id: string) => id);
   const nodes = new Map<string, ImpactNode>();
   const score = new Map<string, number>();
   const edges = new Map<string, ImpactEdge>();
@@ -87,7 +90,7 @@ export function buildGraph(input: GraphInput): GraphResult {
       impactedBy.set(id, set);
       const isMember = id.includes('#');
       if (isMember) {
-        const r = input.index.getMember(id);
+        const r = input.index.getMember(toIdx(id));
         nodes.set(id, {
           id,
           label: symbolLabel(id),
@@ -100,8 +103,8 @@ export function buildGraph(input: GraphInput): GraphResult {
           ...rangeOf(r?.member.range, undefined),
         });
       } else {
-        const t = input.index.getType(id);
-        const f = input.index.getFileOfType(id);
+        const t = input.index.getType(toIdx(id));
+        const f = input.index.getFileOfType(toIdx(id));
         nodes.set(id, {
           id,
           label: t?.name ?? simpleTypeName(id),
@@ -109,7 +112,7 @@ export function buildGraph(input: GraphInput): GraphResult {
           status: 'impacted',
           file: f?.path ?? fallback.file,
           typeId: id,
-          layer: input.layerOf(f?.path ?? fallback.file, id),
+          layer: input.layerOf(f?.path ?? fallback.file, toIdx(id)),
           riskLevel: 'low',
           ...rangeOf(t?.range, undefined),
         });
@@ -205,7 +208,8 @@ function rangeOf(newRange: Range | undefined, oldRange: Range | undefined): Pick
 }
 
 function inheritanceKind(sub: string, sup: string, tdById: Map<string, TypeDiff>, input: GraphInput): 'extends' | 'implements' {
-  const supKind = tdById.get(sup)?.change.kind ?? input.index.getType(sup)?.kind;
-  const subKind = tdById.get(sub)?.change.kind ?? input.index.getType(sub)?.kind;
+  const toIdx = input.toIndexId ?? ((id: string) => id);
+  const supKind = tdById.get(sup)?.change.kind ?? input.index.getType(toIdx(sup))?.kind;
+  const subKind = tdById.get(sub)?.change.kind ?? input.index.getType(toIdx(sub))?.kind;
   return supKind === 'interface' && subKind !== 'interface' ? 'implements' : 'extends';
 }

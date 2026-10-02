@@ -26,5 +26,10 @@ export function createEmptyIndex(models: readonly JavaFileModel[]): RepoIndexApi
     calleesOf: () => [],
     findCallsTo: (): CallRef[] => [],
     filesReferencingType: () => [],
+    targetsOfCallSite: () => [],
+    typesByFqn: (fqn) => {
+      const e = types.get(fqn);
+      return e ? [e] : [];
+    },
   };
 }

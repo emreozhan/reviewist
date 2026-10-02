@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import type { FileChange } from '../../../../src/shared/types';
 import { DeltaBar } from '../../components/DeltaBar';
 import { FileStatusIcon } from '../../components/FileStatusIcon';
@@ -14,20 +13,14 @@ interface FileRowProps {
   compact?: boolean;
 }
 
-/** Gezgin satırı: görüldü kutusu + dosyayı seçen düğme (durum, ad, +/−, risk, kozmetik). */
+/** Gezgin satırı: görüldü kutusu + dosyayı seçen düğme (durum, ad, +/−, risk, kozmetik). Görünür alana getirmeyi liste yapar. */
 export function FileRow({ file, order, compact = false }: FileRowProps) {
   const selected = useUi((s) => s.selectedFileId === file.id);
   const selectFile = useUi((s) => s.selectFile);
   const seen = useProgress((s) => !!s.seen[file.id]);
   const toggleSeen = useProgress((s) => s.toggleSeen);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (selected) ref.current?.scrollIntoView({ block: 'nearest' });
-  }, [selected]);
-
   return (
-    <div ref={ref} className={`frow${selected ? ' is-selected' : ''}${seen ? ' is-seen' : ''}${file.cosmeticOnly ? ' is-cosmetic' : ''}`}>
+    <div className={`frow${selected ? ' is-selected' : ''}${seen ? ' is-seen' : ''}${file.cosmeticOnly ? ' is-cosmetic' : ''}`}>
       <input
         type="checkbox"
         className="frow__seen"

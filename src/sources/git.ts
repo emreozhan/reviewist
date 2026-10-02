@@ -12,7 +12,7 @@ import {
   createSideResolver,
   filterByExt,
   gitStableKey,
-  isBinaryBuffer,
+  isBinaryContent,
   LruCache,
   resolveInside,
   sanitizeRepoRelPath,
@@ -45,7 +45,8 @@ export interface GitResult {
   code: number;
 }
 
-const BASE_CONFIG = ['-c', 'core.quotepath=false', '-c', 'color.ui=false'];
+/** Tüm git çağrılarına eklenen yapılandırma. `core.longpaths`: Windows'ta 260 karakteri aşan yollar (ör. guava). */
+const BASE_CONFIG = ['-c', 'core.quotepath=false', '-c', 'color.ui=false', '-c', 'core.longpaths=true'];
 
 function gitArgs(args: string[], config?: Record<string, string>): string[] {
   const extra: string[] = [];
@@ -226,6 +227,32 @@ function splitNul(out: string): string[] {
   return out.split('\0').filter((s) => s !== '');
 }
 
+/** `git ls-tree -r -z --full-tree <commit>` sonucu: tüm yollar + blob yolu → blob SHA. */
+export interface GitTree {
+  paths: string[];
+  blobs: Map<string, string>;
+}
+
+/** `ls-tree -z` çıktısını (`<mod> <tür> <sha>\t<yol>`) ayrıştırır. */
+export function parseLsTree(out: string): GitTree {
+  const paths: string[] = [];
+  const blobs = new Map<string, string>();
+  for (const rec of splitNul(out)) {
+    const tab = rec.indexOf('\t');
+    if (tab < 0) continue;
+    const path = rec.slice(tab + 1);
+    const [, type = '', sha = ''] = rec.slice(0, tab).split(' ');
+    paths.push(path);
+    if (type === 'blob') blobs.set(path, sha);
+  }
+  return { paths, blobs };
+}
+
+/** Commit ağacını (yollar + blob SHA'ları) tek git çağrısıyla okur. */
+export async function loadGitTree(top: string, commit: string): Promise<GitTree> {
+  return parseLsTree(await runGit(top, ['ls-tree', '-r', '-z', '--full-tree', commit]));
+}
+
 // ---------------------------------------------------------------------------
 // GitBlobReader: kalıcı `git cat-file --batch`
 // ---------------------------------------------------------------------------
@@ -285,7 +312,7 @@ export class GitBlobReader {
     const p = (async () => {
       try {
         const buf = await this.read(rev, path);
-        const text = buf === undefined || isBinaryBuffer(buf) ? null : buf.toString('utf8');
+        const text = buf === undefined || isBinaryContent(buf, path) ? null : buf.toString('utf8');
         this.cache.set(key, text);
         return text === null ? undefined : text;
       } finally {
@@ -403,6 +430,134 @@ export class GitBlobReader {
 }
 
 // ---------------------------------------------------------------------------
+// Satır sonu dönüşümü (çalışma ağacı → git'in "clean" görünümü)
+// ---------------------------------------------------------------------------
+
+/** Dosya için git'in `crlf`, `text`, `eol` öznitelik değerleri (`set`, `unset`, `unspecified` ya da değer). */
+export interface CrlfAttrs {
+  crlf?: string;
+  text?: string;
+  eol?: string;
+}
+
+export type AutoCrlf = 'true' | 'input' | 'false';
+
+/**
+ * Commit'e alınırken (clean) git'in yapacağı satır sonu işlemi (git convert.c `convert_attrs`):
+ * - 'none': dönüşüm yok (`-text`, ya da öznitelik yok ve core.autocrlf=false),
+ * - 'text': CRLF → LF her zaman (`text`, `eol=lf|crlf`, `crlf=input`),
+ * - 'auto': CRLF → LF yalnız içerik metinse ve indeksteki sürümde CR yoksa (`text=auto`, core.autocrlf=true|input).
+ */
+export function crlfActionFor(attrs: CrlfAttrs, autocrlf: AutoCrlf): 'none' | 'text' | 'auto' {
+  const fromAttr = (v: string | undefined): 'none' | 'text' | 'auto' | undefined => {
+    if (v === 'set' || v === 'input') return 'text';
+    if (v === 'unset') return 'none';
+    if (v === 'auto') return 'auto';
+    return undefined;
+  };
+  let action = fromAttr(attrs.text) ?? fromAttr(attrs.crlf);
+  if (action !== 'none' && (attrs.eol === 'lf' || attrs.eol === 'crlf')) {
+    action = action === 'auto' ? 'auto' : 'text';
+  }
+  if (action !== undefined) return action;
+  return autocrlf === 'false' ? 'none' : 'auto';
+}
+
+/** git'in otomatik (auto) modda "ikili" saydığı içerik: NUL, tek başına CR ya da çok yazdırılamaz bayt. */
+export function gitAutoCrlfTreatsAsBinary(buf: Uint8Array): boolean {
+  let printable = 0;
+  let nonPrintable = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const c = buf[i] ?? 0;
+    if (c === 13) {
+      if (buf[i + 1] !== 10) return true; // tek başına CR
+      continue;
+    }
+    if (c === 10) continue;
+    if (c === 0) return true;
+    if (c === 127) nonPrintable++;
+    else if (c < 32) {
+      if (c === 8 || c === 9 || c === 27 || c === 12) printable++;
+      else nonPrintable++;
+    } else printable++;
+  }
+  if (buf.length > 0 && buf[buf.length - 1] === 26) nonPrintable--; // DOS dosya sonu işareti (^Z)
+  return printable >> 7 < nonPrintable;
+}
+
+function parseAutoCrlf(raw: string): AutoCrlf {
+  const v = raw.trim().toLowerCase();
+  if (v === 'input') return 'input';
+  if (v === 'true' || v === 'yes' || v === 'on' || v === '1') return 'true';
+  return 'false';
+}
+
+/** `git check-attr -z --stdin crlf text eol` ile yolların özniteliklerini toplu okur. */
+export async function loadCrlfAttrs(top: string, paths: Iterable<string>): Promise<Map<string, CrlfAttrs>> {
+  const list = [...paths];
+  const map = new Map<string, CrlfAttrs>();
+  if (list.length === 0) return map;
+  const out = await runGit(top, ['check-attr', '-z', '--stdin', 'crlf', 'text', 'eol'], {
+    input: `${list.join('\0')}\0`,
+  });
+  const parts = out.split('\0');
+  for (let i = 0; i + 2 < parts.length; i += 3) {
+    const path = parts[i] ?? '';
+    const attr = parts[i + 1];
+    const value = parts[i + 2];
+    const e = map.get(path) ?? {};
+    if (attr === 'crlf' || attr === 'text' || attr === 'eol') e[attr] = value;
+    map.set(path, e);
+  }
+  return map;
+}
+
+/**
+ * Diskten okunan çalışma ağacı içeriğini git'in diff'te kullandığı "clean" görünüme getirir: git CRLF → LF
+ * dönüşümü uygulayacaksa (core.autocrlf / .gitattributes) aynısı yapılır. Böylece diff hunk'ları ile
+ * readFile içeriği aynı satırları gösterir ve LF blob ↔ CRLF disk farkı kozmetik gürültü üretmez.
+ * Satır sayısı değişmez (yalnız satır sonundaki CR kaldırılır). `ident`/`working-tree-encoding`/filtreler uygulanmaz.
+ */
+export function createWorktreeCleaner(
+  top: string,
+  reader: GitBlobReader,
+  allPaths: () => Promise<Iterable<string>>,
+): (path: string, buf: Buffer) => Promise<string> {
+  type State = { autocrlf: AutoCrlf; attrs: Map<string, CrlfAttrs> };
+  let state: Promise<State> | undefined;
+  const load = async (): Promise<State> => {
+    const cfg = await runGitResult(top, ['config', '--get', 'core.autocrlf']);
+    const autocrlf = cfg.code === 0 ? parseAutoCrlf(cfg.stdout) : 'false';
+    let attrs = new Map<string, CrlfAttrs>();
+    try {
+      attrs = await loadCrlfAttrs(top, await allPaths());
+    } catch (err) {
+      console.warn(
+        `[reviewist] .gitattributes okunamadı; yalnız core.autocrlf kullanılıyor (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+    return { autocrlf, attrs };
+  };
+  return async (path, buf) => {
+    const text = buf.toString('utf8');
+    if (!text.includes('\r\n')) return text;
+    state ??= load();
+    const s = await state;
+    const action = crlfActionFor(s.attrs.get(path) ?? {}, s.autocrlf);
+    if (action === 'none') return text;
+    if (action === 'auto') {
+      if (gitAutoCrlfTreatsAsBinary(buf)) return text;
+      // git: indeksteki sürüm CR içeriyorsa dönüştürmez (convert.c has_crlf_in_index).
+      if (!reader.closed) {
+        const idx = await reader.read(':0', path).catch(() => undefined);
+        if (idx !== undefined && idx.includes(13)) return text;
+      }
+    }
+    return text.replace(/\r\n/g, '\n');
+  };
+}
+
+// ---------------------------------------------------------------------------
 // createGitChangeSet
 // ---------------------------------------------------------------------------
 
@@ -464,7 +619,10 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
 
   const reader = new GitBlobReader(top);
   const sideOf = createSideResolver(files);
-  let listCache: Promise<string[]> | undefined;
+  let headTree: Promise<GitTree> | undefined;
+  let baseTree: Promise<GitTree> | undefined;
+  const treeOf = (side: 'old' | 'new'): Promise<GitTree> =>
+    side === 'old' ? (baseTree ??= loadGitTree(top, baseSha)) : (headTree ??= loadGitTree(top, headSha));
 
   return {
     info: {
@@ -488,8 +646,15 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
       return await reader.readText(side === 'old' ? baseSha : headSha, t.path);
     },
     async listFiles(_side, ext) {
-      listCache ??= runGit(top, ['ls-tree', '-r', '-z', '--name-only', '--full-tree', headSha]).then(splitNul);
-      return filterByExt(await listCache, ext);
+      return filterByExt((await treeOf('new')).paths, ext);
+    },
+    async blobId(side, rawPath) {
+      // Blob SHA'sı commit ağacından (ls-tree, taraf başına bir kez); readFile ile aynı yol eşlemesi.
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
+      const t = sideOf(side, path);
+      if (t.path === undefined || t.binary) return undefined;
+      return (await treeOf(side)).blobs.get(t.path);
     },
     dispose() {
       return reader.close();
@@ -545,7 +710,7 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
           } catch {
             return undefined; // okunamayan (ör. silinmiş, dizin bağlantısı) dosya atlanır
           }
-          if (isBinaryBuffer(buf) || buf.length > MAX_UNTRACKED_BYTES) {
+          if (isBinaryContent(buf, p) || buf.length > MAX_UNTRACKED_BYTES) {
             return { path: p, status: 'added', binary: true, additions: 0, deletions: 0, hunks: [] };
           }
           const { hunks, additions } = hunksForAddedContent(buf.toString('utf8'));
@@ -569,6 +734,8 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
     });
     return allowed;
   };
+  const toGitText = createWorktreeCleaner(top, reader, loadAllowed);
+  let baseTree: Promise<GitTree> | undefined;
 
   return {
     info: {
@@ -599,13 +766,23 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
       if (!abs) return undefined;
       try {
         const buf = await readFile(abs);
-        return isBinaryBuffer(buf) ? undefined : buf.toString('utf8');
+        return isBinaryContent(buf, t.path) ? undefined : await toGitText(t.path, buf);
       } catch {
         return undefined;
       }
     },
     async listFiles(_side, ext) {
       return filterByExt([...(await loadAllowed())].sort(), ext);
+    },
+    async blobId(side, rawPath) {
+      // Yeni taraf diskten okunur: kararlı kimliği yok (hash-object maliyeti yerine undefined).
+      if (side === 'new') return undefined;
+      const path = sanitizeRepoRelPath(rawPath);
+      if (path === undefined) return undefined;
+      const t = sideOf('old', path);
+      if (t.path === undefined || t.binary) return undefined;
+      baseTree ??= loadGitTree(top, baseSha);
+      return (await baseTree).blobs.get(t.path);
     },
     dispose() {
       return reader.close();

@@ -5,6 +5,7 @@
 import type { Node } from 'web-tree-sitter';
 import type { MemberKind, Range, TypeKind } from '../../shared/types.js';
 import type {
+  AnonymousClassInfo,
   CallSite,
   CodeFeatures,
   JavaFileModel,
@@ -16,6 +17,7 @@ import type {
   Visibility,
 } from './model.js';
 import { baseTypeName, collapseWs, eraseTypeForId, simpleName, stripTypeArgs } from './names.js';
+import { maskedTokens, maskVarargsAnnotations } from './mask.js';
 import { getJavaParser } from './parser.js';
 
 // ---------------------------------------------------------------------------
@@ -86,6 +88,78 @@ class FileCtx {
     }
   }
 
+  /** Maskelenmiş (ayrıştırıcıya gösterilmemiş) metnin tokenlarını ekler; konum sırası korunur. */
+  addTokens(extra: Tok[]): void {
+    if (extra.length === 0) return;
+    this.toks.push(...extra);
+    this.toks.sort((a, b) => a.s - b.s);
+  }
+
+  private anonBodiesCache: Node[] | undefined;
+
+  /** Anonim sınıf gövdeleri (`new X() { ... }` içindeki class_body), başlangıca göre sıralı. */
+  anonBodies(): Node[] {
+    if (!this.anonBodiesCache) {
+      const out: Node[] = [];
+      for (const ev of this.events) {
+        if (ev.type !== 'object_creation_expression' || !ev.node) continue;
+        const body = childOfType(ev.node, 'class_body');
+        if (body) out.push(body);
+      }
+      out.sort((a, b) => a.startIndex - b.startIndex);
+      this.anonBodiesCache = out;
+    }
+    return this.anonBodiesCache;
+  }
+
+  private hasAnonIn(s: number, e: number): boolean {
+    const bodies = this.anonBodies();
+    if (bodies.length === 0) return false;
+    let lo = 0;
+    let hi = bodies.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((bodies[mid] as Node).startIndex < s) lo = mid + 1;
+      else hi = mid;
+    }
+    const b = bodies[lo];
+    return !!b && b.endIndex <= e;
+  }
+
+  /**
+   * Anonim sınıf gövdelerindeki üyeleri sıralanmış (kanonik) token metni: c = boşluksuz, n = tek boşluklu.
+   * Üye sırası değişimi gövde/başlatıcı değişikliği sayılmasın diye.
+   */
+  private canon(s: number, e: number): { c: string; n: string } {
+    const bodies = this.anonBodies().filter((b) => b.startIndex >= s && b.endIndex <= e);
+    const cs: string[] = [];
+    const ns: string[] = [];
+    let ti = this.lowerBound(this.toks, s);
+    let bi = 0;
+    while (ti < this.toks.length) {
+      const t = this.toks[ti] as Tok;
+      if (t.e > e) break;
+      const b = bodies[bi];
+      if (b && t.s >= b.startIndex) {
+        const chunks = namedNonComment(b).map((m) => this.canon(m.startIndex, m.endIndex));
+        chunks.sort((x, y) => (x.c < y.c ? -1 : x.c > y.c ? 1 : 0));
+        cs.push(`{${chunks.map((x) => x.c).join('')}}`);
+        ns.push(['{', ...chunks.map((x) => x.n).filter((x) => x), '}'].join(' '));
+        while (ti < this.toks.length && (this.toks[ti] as Tok).s < b.endIndex) ti++;
+        while (bi < bodies.length && (bodies[bi] as Node).startIndex < b.endIndex) bi++;
+        continue;
+      }
+      if (b && t.s >= b.endIndex) {
+        bi++;
+        continue;
+      }
+      cs.push(t.t);
+      ns.push(t.t);
+      ti++;
+    }
+    return { c: cs.join(''), n: ns.join(' ') };
+  }
+
   eventsIn(s: number, e: number): NodeEvent[] {
     const out: NodeEvent[] = [];
     for (let i = this.lowerBound(this.events, s); i < this.events.length; i++) {
@@ -119,12 +193,29 @@ class FileCtx {
 
   /** Yorumsuz, tokenlar tek boşlukla birleştirilmiş metin. */
   norm(s: number, e: number): string {
+    if (this.hasAnonIn(s, e)) return this.canon(s, e).n;
     return this.tokens(s, e).join(' ');
   }
 
   /** Yorumsuz, tüm boşluklar atılmış metin (string içerikleri korunur). */
   compact(s: number, e: number): string {
+    if (this.hasAnonIn(s, e)) return this.canon(s, e).c;
     return this.tokens(s, e).join('');
+  }
+
+  /** Büyük harfle başlayan tanımlayıcı tokenları (olası tip referansları); önünde '.' olan TAMAMI_BÜYÜK sabitler hariç. */
+  typeRefs(): string[] {
+    const out = new Set<string>();
+    let prev = '';
+    for (const t of this.toks) {
+      const x = t.t;
+      const c = x.charCodeAt(0);
+      if (c >= 65 && c <= 90 && /^[A-Z][\w$]*$/.test(x)) {
+        if (!(prev === '.' && !/[a-z]/.test(x))) out.add(x);
+      }
+      prev = x;
+    }
+    return [...out];
   }
 
   comments(s: number, e: number): Cmt[] {
@@ -339,6 +430,28 @@ const COUNTED = new Set([
   'synchronized_statement',
 ]);
 
+/** `Objects` üzerinde null güvenli / null denetleyen metotlar (B10). */
+const NULL_SAFE_OBJECTS = new Set([
+  'requireNonNull',
+  'requireNonNullElse',
+  'requireNonNullElseGet',
+  'hashCode',
+  'equals',
+  'toString',
+  'isNull',
+  'nonNull',
+  'hash',
+]);
+/** Statik import ile alıcısız çağrılabilen (adı tek başına anlamlı) null denetimleri. */
+const NULL_CHECK_UNQUALIFIED = new Set(['requireNonNull', 'requireNonNullElse', 'requireNonNullElseGet', 'isNull', 'nonNull']);
+
+/** Null denetimi sayılan çağrı mı: Objects.* (yukarıdaki), Optional.* (ofNullable dahil), statik importlu requireNonNull vb. */
+function isNullCheckCall(objText: string | undefined, name: string): boolean {
+  if (objText === undefined) return NULL_CHECK_UNQUALIFIED.has(name);
+  if (objText === 'Objects' || objText === 'java.util.Objects') return NULL_SAFE_OBJECTS.has(name);
+  return objText === 'Optional' || objText === 'java.util.Optional';
+}
+
 function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
   switch (n.type) {
     case 'method_invocation': {
@@ -360,13 +473,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       a.callSites.push(site);
       if (name === 'printStackTrace') a.features.printStackTrace++;
       if (objText === 'System.out' || objText === 'System.err') a.features.systemOut++;
-      if (
-        name === 'requireNonNull' &&
-        (objText === undefined || objText === 'Objects' || objText === 'java.util.Objects')
-      ) {
-        a.features.nullChecks++;
-      }
-      if (objText === 'Optional' || objText === 'java.util.Optional') a.features.nullChecks++;
+      if (isNullCheckCall(objText, name)) a.features.nullChecks++;
       return;
     }
     case 'object_creation_expression': {
@@ -404,6 +511,9 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       if (recvText) site.receiver = recvText;
       a.callSites.push(site);
       if (recvText === 'System.out' || recvText === 'System.err') a.features.systemOut++;
+      if (!isCtor && (recvText === 'Objects' || recvText === 'java.util.Objects') && NULL_SAFE_OBJECTS.has(site.name)) {
+        a.features.nullChecks++;
+      }
       return;
     }
     case 'explicit_constructor_invocation': {
@@ -703,7 +813,37 @@ function baseMember(
     m.javadoc = jd.text;
     m.javadocRange = jd.range;
   }
+  const anon = anonymousClassesIn(ctx, init.analysisNodes);
+  if (anon.length) m.anonymousClasses = anon;
   return m;
+}
+
+/** Düğümlerdeki anonim sınıflar (kaynak sırasıyla, iç içe olanlar dahil) ve gövdelerindeki metotlar. */
+function anonymousClassesIn(ctx: FileCtx, nodes: (Node | null | undefined)[]): AnonymousClassInfo[] {
+  if (ctx.anonBodies().length === 0) return [];
+  const out: AnonymousClassInfo[] = [];
+  for (const root of nodes) {
+    if (!root) continue;
+    for (const ev of ctx.eventsIn(root.startIndex, root.endIndex)) {
+      if (ev.type !== 'object_creation_expression' || !ev.node) continue;
+      const body = childOfType(ev.node, 'class_body');
+      const t = ev.node.childForFieldName('type');
+      if (!body || !t) continue;
+      const methods: AnonymousClassInfo['methods'] = [];
+      for (const ch of namedNonComment(body)) {
+        if (ch.type !== 'method_declaration') continue;
+        const nm = ch.childForFieldName('name');
+        if (!nm) continue;
+        methods.push({
+          name: ctx.slice(nm),
+          params: readParams(ctx, ch.childForFieldName('parameters')),
+          line: ch.startPosition.row + 1,
+        });
+      }
+      out.push({ superType: stripTypeArgs(ctx.slice(t)), line: ev.node.startPosition.row + 1, methods });
+    }
+  }
+  return out;
 }
 
 function memberVisibility(tc: TypeCtx, mods: string[]): Visibility {
@@ -1062,7 +1202,11 @@ export async function parseJavaFile(path: string, source: string): Promise<JavaF
     lineCount: countLines(source),
     normalizedCode: '',
   };
-  const tree = parser.parse(source);
+  // B4: tree-sitter-java'nın desteklemediği varargs tip anotasyonları aynı uzunlukta boşlukla maskelenir (her zaman,
+  // içerik deterministik). Ham metinler (text, imza, parametre) orijinal kaynaktan dilimlenir; maskelenen tokenlar
+  // normalizasyona geri eklenir.
+  const masked = maskVarargsAnnotations(source);
+  const tree = parser.parse(masked ? masked.source : source);
   if (!tree) {
     model.hasErrors = true;
     return model;
@@ -1071,6 +1215,8 @@ export async function parseJavaFile(path: string, source: string): Promise<JavaF
     const root = tree.rootNode;
     const ctx = new FileCtx(source);
     ctx.collect(root);
+    if (masked) ctx.addTokens(maskedTokens(source, masked.spans));
+    model.typeRefs = ctx.typeRefs();
     const codeParts: string[] = [];
     for (const ch of namedNonComment(root)) {
       if (ch.type === 'package_declaration') {

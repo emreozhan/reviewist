@@ -41,9 +41,15 @@ export const RISK_WEIGHTS = {
   /** Diff dışında çağıran: taban + çağıran başına (en fazla 10) */
   callersOutside: 10,
   callersOutsidePer: 3,
+  /** Yalnız 'likely' çağıranlardan gelen katkının tavanı */
+  callersOutsideLikelyCap: 8,
+  /** 'body-changed' + 'callers-outside-diff' birleşiminin tavanı (tek başına high üretmesin: < 45) */
+  bodyWithCallersCap: 40,
   /** Anlam taşıyan anotasyonlar: grup ağırlıkları SEMANTIC_ANNOTATIONS'ta, toplam tavan */
   annotationCap: 40,
   equalityContract: 40,
+  /** equals/hashCode/compareTo aynı alanlarla yeniden yazıldı */
+  equalityRewrite: 15,
   equalsHashCodeMismatch: 15,
   toStringWithEquals: 10,
   concurrency: 20,
@@ -72,6 +78,12 @@ export const RISK_WEIGHTS = {
   superTypesChanged: 25,
   typeVisibilityNarrowed: 20,
   springBean: 15,
+  /** Import hedefi değişti (aynı basit ad başka FQN'e): çerçeve/anlam taşıyan pakette orta, diğerlerinde düşük */
+  importRetargetMeaningful: 25,
+  importRetarget: 8,
+  /** module-info requires/exports/opens/provides/uses değişikliği */
+  moduleDescriptor: 25,
+  packageInfo: 3,
   /** Java dışı */
   buildDependency: 30,
   buildOther: 20,
@@ -219,12 +231,21 @@ export interface MemberRiskInput {
   ownerVisibility: Visibility;
   /** Sahip tipin repo içindeki (geçişli) alt tip / implementasyon sayısı. */
   implementationCount: number;
-  /** Diff dışındaki farklı çağıran sayısı. */
+  /** Diff dışındaki farklı çağıran sayısı ('exact' güvenli çağrılar). */
   outsideCallers: number;
-  /** Head'de hâlâ eski ad/arity ile yapılan çağrılar (silinmiş/yeniden adlandırılmış/arity'si değişmiş üyeler için). */
+  /** Diff dışındaki 'likely' güvenli farklı çağıran sayısı (yarım ağırlık, küçük tavan). name-only sayılmaz. */
+  outsideLikelyCallers?: number;
+  /**
+   * Head'de hâlâ eski ad/arity ile yapılan çağrılar (silinmiş/yeniden adlandırılmış/arity'si değişmiş üyeler için).
+   * 'exact' varsa tam ağırlık (error); yalnız 'likely' ise yarım ağırlık (warning); 'name-only' sayılmaz.
+   */
   staleCalls: readonly CallRef[];
-  /** Alt tiplerde eski imzayla kalıp artık override etmeyen metot id'leri. */
+  /** Alt tiplerde eski imzayla kalıp @Override taşıyan ve artık hiçbir şeyi override etmeyen (derlenmez) metot id'leri. */
   brokenOverrides: readonly string[];
+  /** Alt tiplerde eski imzayla kalıp @Override taşımayan, artık asıl bildirim olan metot id'leri (bilgi, risk 0). */
+  orphanedOverrides?: readonly string[];
+  /** Sahip tip bu diff'te eklendi (implementasyon sayısı anlamsız). */
+  ownerAdded?: boolean;
   isTest: boolean;
   /** Aynı tipte kozmetik olmayan şekilde değişen üye adları (toString/equals ilişkisi için). */
   changedSiblingNames?: ReadonlySet<string>;
@@ -281,6 +302,34 @@ function isAbstractMember(m: JavaMember | undefined, ownerKind: TypeKind): boole
   return false;
 }
 
+const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+
+/** Metin içinde geçen, sahip tipin alanı olan adlar. */
+function referencedFields(text: string, fields: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.replace(/\/\/.*$|\/\*[\s\S]*?\*\//gm, ' ').matchAll(IDENT_RE)) {
+    const id = m[0];
+    if (fields.has(id)) out.add(id);
+    // Erişimci çağrısı (getObject() / isEnabled()) ilgili alana referans sayılır.
+    const acc = /^(?:get|is)([A-Z][\w$]*)$/.exec(id);
+    if (acc) {
+      const field = acc[1].charAt(0).toLowerCase() + acc[1].slice(1);
+      if (fields.has(field)) out.add(field);
+    }
+  }
+  return out;
+}
+
+/** equals/hashCode/compareTo karşılaştırmaya giren alan kümesi değişti mi (alan okunmuyorsa ayırt edilemez → true). */
+function equalityFieldsChanged(oldM: JavaMember, newM: JavaMember, owner: JavaType | undefined): boolean {
+  const fields = new Set([...Object.keys(owner?.fieldTypes ?? {}), ...(owner?.members.filter((m) => m.kind === 'field').map((m) => m.name) ?? [])]);
+  if (fields.size === 0) return true;
+  const a = referencedFields(oldM.text, fields);
+  const b = referencedFields(newM.text, fields);
+  if (a.size === 0 && b.size === 0) return true;
+  return a.size !== b.size || [...a].some((x) => !b.has(x));
+}
+
 function callSummary(calls: readonly CallRef[], max = 3): string {
   const list = calls.slice(0, max).map((c) => `${basename(c.file)}:${c.line}`);
   return list.join(', ') + (calls.length > max ? ` ve ${calls.length - max} yer daha` : '');
@@ -332,20 +381,37 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
   const api = isApiVisible(oldVis, input.ownerVisibility, ownerKind) || isApiVisible(ch.visibility, input.ownerVisibility, ownerKind);
   const isMethod = ch.kind === 'method' || ch.kind === 'constructor';
 
-  // Silinmiş/değişmiş ama çağrılıyor
-  if (input.staleCalls.length > 0) {
-    const n = input.staleCalls.length;
+  // Silinmiş/değişmiş ama çağrılıyor: yalnız 'exact' tam ağırlık; yalnız 'likely' varsa yarım ağırlık; name-only sayılmaz.
+  const stale = input.staleCalls.filter((c) => c.confidence !== 'name-only');
+  if (stale.length > 0) {
+    const n = stale.length;
+    const exact = stale.some((c) => c.confidence === 'exact');
+    const verb = status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : 'İmzası değişti';
+    const typeHint =
+      status === 'signatureChanged' && oldM && newM && oldM.name === newM.name && oldM.params.length === newM.params.length
+        ? '; argüman tipleri yeni parametre tipleriyle uyuşmuyor gibi görünüyor'
+        : '';
+    const full = W.removedWithCallers + W.removedWithCallersPerCall * Math.min(n, 4);
     add(
       'removed-with-callers',
-      `${status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : 'İmzası değişti'} ama head'de hâlâ ${n} yerde eski haliyle çağrılıyor (${callSummary(input.staleCalls)})${status === 'signatureChanged' && oldM && newM && oldM.name === newM.name && oldM.params.length === newM.params.length ? '; argüman tipleri yeni parametre tipleriyle uyuşmuyor gibi görünüyor' : ''}; derleme veya çalışma zamanı hatası olası`,
-      W.removedWithCallers + W.removedWithCallersPerCall * Math.min(n, 4),
+      exact
+        ? `${verb} ama head'de hâlâ ${n} yerde eski haliyle çağrılıyor (${callSummary(stale)})${typeHint}; derleme veya çalışma zamanı hatası olası`
+        : `${verb}; head'de ${n} yerde eski haliyle çağrılıyor olabilir (${callSummary(stale)})${typeHint}; çağrı yerleri kesin doğrulanamadı`,
+      exact ? full : Math.round(full / 2),
     );
   }
   if (input.brokenOverrides.length > 0) {
     add(
       'override-broken',
-      `Alt sınıflardaki ${input.brokenOverrides.length} metot hâlâ eski imzayı taşıyor ve artık bunu override etmiyor (${input.brokenOverrides.slice(0, 3).map(shortId).join(', ')})`,
+      `Alt sınıflardaki ${input.brokenOverrides.length} metot @Override taşıyor ama artık hiçbir şeyi override etmiyor; derlenmez (${input.brokenOverrides.slice(0, 3).map(shortId).join(', ')})`,
       W.overrideBroken,
+    );
+  }
+  if (input.orphanedOverrides && input.orphanedOverrides.length > 0) {
+    add(
+      'override-orphaned',
+      `Alt sınıflardaki ${input.orphanedOverrides.length} metot artık bunu override etmiyor; asıl bildirim artık onlar (${input.orphanedOverrides.slice(0, 3).map(shortId).join(', ')})`,
+      0,
     );
   }
 
@@ -385,8 +451,12 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
           : `${ownerKind === 'interface' ? 'Arayüz' : 'Soyut'} metot sözleşmesi değişti; ${impl} implementasyon etkileniyor`;
     // İmza/silme nedeni zaten varsa taban düşürülür (aynı değişiklik iki kez sayılmasın)
     const base = reasons.some((r) => r.code.startsWith('public-api')) ? W.interfaceContract - 10 : W.interfaceContract;
-    if (impl === 0 && ownerKind === 'interface') {
-      add('interface-contract', `${what.split(';')[0]}; repoda implementasyonu yok (framework üretiyor ya da dış implementasyonlar olabilir)`, 5);
+    if (impl === 0) {
+      // Implementasyon yoksa "0 implementasyonun hepsi uygulamalı" gibi anlamsız sayı üretilmez. Var olan (yeni olmayan)
+      // arayüzde dış implementasyon olasılığı küçük bir katkıyla not edilir; yeni tip veya soyut sınıf/enum'da kural sessiz.
+      if (ownerKind === 'interface' && !input.ownerAdded) {
+        add('interface-contract', `${what.split(';')[0]}; repoda implementasyonu yok (framework üretiyor ya da dış implementasyonlar olabilir)`, 5);
+      }
     } else {
       add('interface-contract', what, base + W.interfaceContractPerImpl * Math.min(impl, 5));
     }
@@ -408,9 +478,16 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
   }
 
   // Diff dışı çağıranlar
-  if (input.outsideCallers > 0 && status !== 'added' && status !== 'removed') {
+  // Ağırlık yalnız 'exact' çağıranlarla tam; 'likely' yarım ağırlık ve küçük tavanla; name-only sıfır.
+  const likelyOutside = input.outsideLikelyCallers ?? 0;
+  if ((input.outsideCallers > 0 || likelyOutside > 0) && status !== 'added' && status !== 'removed') {
     const n = input.outsideCallers;
-    add('callers-outside-diff', `Diff dışında ${n} çağıranı var; değişiklik onlara yayılır`, W.callersOutside + W.callersOutsidePer * Math.min(n, 10));
+    const exactWeight = n > 0 ? W.callersOutside + W.callersOutsidePer * Math.min(n, 10) : 0;
+    const likelyWeight = likelyOutside > 0 ? Math.min(W.callersOutsideLikelyCap, Math.round((W.callersOutside + W.callersOutsidePer * Math.min(likelyOutside, 10)) / 2)) : 0;
+    const parts: string[] = [];
+    if (n > 0) parts.push(`${n} çağıranı var`);
+    if (likelyOutside > 0) parts.push(`${likelyOutside} olası (alıcı tipi kesin çözülemeyen) çağıranı var`);
+    add('callers-outside-diff', `Diff dışında ${parts.join(', ')}; değişiklik onlara yayılır`, exactWeight + (n > 0 ? Math.min(likelyWeight, 5) : likelyWeight));
   }
 
   if (oldM && newM) {
@@ -426,14 +503,26 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
 
     // equals / hashCode / compareTo / toString
     const name = newM.name;
-    if (isMethod && (name === 'equals' || name === 'hashCode' || name === 'compareTo')) {
-      add('equality-contract', `${name} değişti: koleksiyonlarda (HashMap/HashSet/TreeSet), sıralamada ve eşitlik karşılaştırmalarında davranış değişir`, W.equalityContract);
+    // Yalnız Object/Comparable sözleşme metotları (örnek metot, standart arity): statik ObjectUtils.equals(a, b) değil.
+    const instance = ch.kind === 'method' && !newM.modifiers.includes('static');
+    const isContract = instance && newM.params.length === (name === 'hashCode' || name === 'toString' ? 0 : 1);
+    if (isContract && (name === 'equals' || name === 'hashCode' || name === 'compareTo')) {
+      // Anlamlı değişiklik: karşılaştırmaya giren alan kümesi değişti (ya da hiç alan okunmuyor, ayırt edilemiyor).
+      // Aynı alanlarla yeniden yazım (Objects.hashCode(x) ↔ x == null ? 0 : x.hashCode()) düşük ağırlık alır.
+      const meaningful = equalityFieldsChanged(oldM, newM, input.ownerType);
+      add(
+        'equality-contract',
+        meaningful
+          ? `${name} değişti: koleksiyonlarda (HashMap/HashSet/TreeSet), sıralamada ve eşitlik karşılaştırmalarında davranış değişir`
+          : `${name} yeniden yazıldı (aynı alanlar kullanılıyor); eşitlik/sıralama davranışının korunduğunu doğrulayın`,
+        meaningful ? W.equalityContract : W.equalityRewrite,
+      );
       const pair = name === 'equals' ? 'hashCode' : name === 'hashCode' ? 'equals' : undefined;
       const ownerHasPair = pair && input.ownerType?.members.some((m) => m.name === pair && m.kind === 'method');
-      if (pair && ownerHasPair && !input.changedSiblingNames?.has(pair)) {
+      if (meaningful && pair && ownerHasPair && !input.changedSiblingNames?.has(pair)) {
         add('equals-hashcode-mismatch', `${name} değişti ama ${pair} değişmedi; equals/hashCode sözleşmesi bozulabilir`, W.equalsHashCodeMismatch);
       }
-    } else if (isMethod && name === 'toString' && (input.changedSiblingNames?.has('equals') || input.changedSiblingNames?.has('hashCode'))) {
+    } else if (isContract && name === 'toString' && (input.changedSiblingNames?.has('equals') || input.changedSiblingNames?.has('hashCode'))) {
       add('equality-contract', 'toString, equals/hashCode ile birlikte değişti; kimlik/temsil mantığı yeniden tanımlanıyor', W.toStringWithEquals);
     }
 
@@ -518,6 +607,13 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
     add('static-mutable', 'static alan final olmaktan çıktı; paylaşılan değişebilir durum', W.staticMutable);
   }
 
+  // Gövde değişikliği + diff dışı çağıranlar birlikte en fazla orta risk: çağıran ağırlığı kırpılır.
+  const callersReason = reasons.find((r) => r.code === 'callers-outside-diff');
+  const bodyReason = reasons.find((r) => r.code === 'body-changed');
+  if (callersReason && bodyReason && callersReason.weight + bodyReason.weight > W.bodyWithCallersCap) {
+    callersReason.weight = Math.max(0, W.bodyWithCallersCap - bodyReason.weight);
+  }
+
   addArchitecture(reasons, input.architecture);
   return finalize(reasons, input.isTest);
 }
@@ -560,6 +656,10 @@ export interface TypeRiskInput {
   staleTypeRefs: readonly string[];
   subTypeCount: number;
   architecture?: readonly ArchitectureIssue[];
+  /** Bu tipin kullandığı basit adların import hedefi değişti (javax → jakarta). */
+  importRetargets?: readonly { from: string; to: string }[];
+  /** Hedef değişiminin anlam taşıyan bir pakette olup olmadığı (orta risk). */
+  meaningfulImport?: (name: string) => boolean;
 }
 
 /** Tip riski = max(tip düzeyi kurallar, en riskli üye) + diğer üyelerden küçük katkı (en fazla 10). */
@@ -603,6 +703,15 @@ export function scoreType(input: TypeRiskInput): RiskInfo {
     }
   }
   if (ch.status === 'added' && api) add('type-added', `Yeni ${ch.kind === 'interface' ? 'arayüz' : 'tip'} eklendi`, W.addedPublic);
+  if (input.importRetargets?.length) {
+    const list = input.importRetargets;
+    const meaningful = list.some((r) => input.meaningfulImport?.(r.from) || input.meaningfulImport?.(r.to));
+    add(
+      'import-retarget',
+      `Import hedefi değişti: ${list.slice(0, 3).map((r) => `${r.from} → ${r.to}`).join(', ')}${list.length > 3 ? ` ve ${list.length - 3} import daha` : ''}; aynı ad artık başka bir tipe bağlanıyor`,
+      meaningful ? W.importRetargetMeaningful : W.importRetarget,
+    );
+  }
   addArchitecture(reasons, input.architecture);
 
   let typeLevel = reasons.reduce((s, r) => s + r.weight, 0);
@@ -667,6 +776,15 @@ export function scoreNonJavaFile(file: Pick<FileChange, 'path' | 'status' | 'lan
 
   if (opts.unanalyzedJava) {
     add('unanalyzed', 'Dosya içeriği alınamadı; sembol düzeyinde analiz yapılamadı, diff elle incelenmeli', W.unanalyzedJava);
+  } else if (name === 'module-info.java') {
+    const directives = [...new Set([...changedText.matchAll(/\b(requires|exports|opens|provides|uses)\b/g)].map((m) => m[1]))];
+    if (directives.length) {
+      add('module-descriptor', `Modül bildirimi değişti (${directives.join(', ')}); modül sınırı/bağımlılıkları ve dışa açılan paketler etkilenir`, W.moduleDescriptor);
+    } else {
+      add('package-info', 'Modül bildirimi (module-info) değişti', W.packageInfo);
+    }
+  } else if (name === 'package-info.java') {
+    add('package-info', 'Paket bildirimi (package-info: paket anotasyonları/javadoc) değişti', W.packageInfo);
   } else if (name === 'pom.xml' || name.endsWith('.gradle') || name.endsWith('.gradle.kts') || name === 'gradle.properties' || name.endsWith('.versions.toml')) {
     if (/<(dependency|artifactId|version|plugin|parent)>|\b(implementation|api|compileOnly|runtimeOnly|testImplementation|annotationProcessor|classpath|id)\b\s*[("']|version\s*=|\bplatform\(/.test(changedText)) {
       add('build-dependency', 'Bağımlılık/sürüm değişikliği: derleme, uyumluluk ve güvenlik etkilerini kontrol edin', W.buildDependency);

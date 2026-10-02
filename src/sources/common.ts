@@ -24,6 +24,96 @@ export function isBinaryBuffer(buf: Uint8Array): boolean {
   return false;
 }
 
+/**
+ * NUL içerse de içerik incelemesiyle metin sayılabilecek kaynak uzantıları. Bu dosyalar git'in NUL
+ * sezgiseliyle ikili sayılırsa repo indeksinden düşer (ör. commons-lang `ClassUtilsOssFuzzTest.java`:
+ * dize sabitlerinde binlerce `\u0000`, geçerli UTF-8).
+ */
+const NUL_TOLERANT_EXTS = ['.java', '.kt', '.kts', '.groovy', '.scala'];
+
+/** İlk 8000 baytta bu orandan fazla geçersiz UTF-8 dizisi varsa içerik ikilidir. */
+const MAX_INVALID_UTF8_RATIO = 0.02;
+
+/**
+ * İçeriğin ikili olup olmadığına yola göre karar verir.
+ * - İlk 8000 baytta NUL yoksa metin.
+ * - NUL varsa ve uzantı Java/JVM kaynağı değilse ikili (git ile aynı).
+ * - Java/JVM kaynağında yalnız gerçekten ikiliyse ikili: geçersiz UTF-8 oranı yüksek ya da UTF-16 düzeni
+ *   (baytların %30'undan fazlası NUL ve neredeyse hepsi aynı çift/tek konumda).
+ */
+export function isBinaryContent(buf: Uint8Array, path: string | undefined): boolean {
+  if (!isBinaryBuffer(buf)) return false;
+  const lower = (path ?? '').toLowerCase();
+  if (!NUL_TOLERANT_EXTS.some((e) => lower.endsWith(e))) return true;
+  const head = buf.subarray(0, Math.min(buf.length, 8000));
+  let nul = 0;
+  let evenNul = 0;
+  for (let i = 0; i < head.length; i++) {
+    if (head[i] === 0) {
+      nul++;
+      if (i % 2 === 0) evenNul++;
+    }
+  }
+  if (nul > head.length * 0.3) {
+    const dominant = Math.max(evenNul, nul - evenNul);
+    if (dominant >= nul * 0.9) return true; // UTF-16 (LE/BE) kodlu metin: UTF-8 olarak okunamaz
+  }
+  return countInvalidUtf8(head) > head.length * MAX_INVALID_UTF8_RATIO;
+}
+
+/** Geçersiz UTF-8 dizisi sayısı; sondaki yarım kalmış çok baytlı dizi sayılmaz (8000 bayt kesimi). */
+function countInvalidUtf8(b: Uint8Array): number {
+  let bad = 0;
+  let i = 0;
+  while (i < b.length) {
+    const c = b[i] ?? 0;
+    if (c < 0x80) {
+      i++;
+      continue;
+    }
+    let need: number;
+    let min: number;
+    if (c >= 0xc2 && c <= 0xdf) {
+      need = 1;
+      min = 0x80;
+    } else if (c >= 0xe0 && c <= 0xef) {
+      need = 2;
+      min = 0x800;
+    } else if (c >= 0xf0 && c <= 0xf4) {
+      need = 3;
+      min = 0x10000;
+    } else {
+      bad++;
+      i++;
+      continue;
+    }
+    if (i + need >= b.length) {
+      // dizi tamponun sonunda kesilmiş olabilir: yalnız mevcut devam baytları geçerliyse sayma
+      let ok = true;
+      for (let k = i + 1; k < b.length; k++) if (((b[k] ?? 0) & 0xc0) !== 0x80) ok = false;
+      if (!ok) bad++;
+      break;
+    }
+    let cp = c & (need === 1 ? 0x1f : need === 2 ? 0x0f : 0x07);
+    let valid = true;
+    for (let k = 1; k <= need; k++) {
+      const cc = b[i + k] ?? 0;
+      if ((cc & 0xc0) !== 0x80) {
+        valid = false;
+        break;
+      }
+      cp = (cp << 6) | (cc & 0x3f);
+    }
+    if (!valid || cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
+      bad++;
+      i++;
+      continue;
+    }
+    i += need + 1;
+  }
+  return bad;
+}
+
 /** Boyut tabanlı LRU önbellek. */
 export class LruCache<V> {
   private readonly map = new Map<string, { value: V; size: number }>();

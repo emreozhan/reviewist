@@ -12,6 +12,7 @@ import { enrich, registerSymbols } from './enrich.js';
 import { buildGraph } from './graph.js';
 import { buildGroups } from './grouping.js';
 import { buildReviewPlan } from './reviewPlan.js';
+import { identitySymbolIds } from './symbolIds.js';
 import { emptyRisk, makeRisk } from './util.js';
 
 const risk = (score: number): RiskInfo => makeRisk([{ code: 't', message: 't', weight: score }]);
@@ -200,8 +201,9 @@ describe('enrich', () => {
   function ctxFor(af: AnalyzedFile[], index: FakeRepoIndex): AnalysisContext {
     return {
       files: af, byPath: new Map(af.map((x) => [x.file.path, x])), typeDiffs: af.flatMap((x) => x.typeDiffs), index, hexagonal: false,
-      repoFiles: [], repoFilesKnown: true, members: new Map(), types: new Map(), staleCalls: new Map(), brokenOverrides: new Map(),
-      staleTypeRefs: new Map(), architecture: new Map(), warnings: [],
+      repoFiles: [], repoFilesKnown: true, members: new Map(), types: new Map(), staleCalls: new Map(), unverifiedStaleCalls: new Map(),
+      brokenOverrides: new Map(), orphanedOverrides: new Map(), staleTypeRefs: new Map(), architecture: new Map(), importRetargets: new Map(),
+      ids: identitySymbolIds(), warnings: [],
     };
   }
 
@@ -211,7 +213,7 @@ describe('enrich', () => {
     const newM = jMember({ ownerFqn: P, name: 'go', params: [] });
     const baseNew = jType({ fqn: P, members: [newM] });
     const file = jFile('src/Base.java', [baseNew]);
-    const sub = jType({ fqn: 'com.acme.Sub', superclass: 'Base', members: [jMember({ ownerFqn: 'com.acme.Sub', name: 'go', params: [{ name: 'a', type: 'int', varargs: false }] })] });
+    const sub = jType({ fqn: 'com.acme.Sub', superclass: 'Base', members: [jMember({ ownerFqn: 'com.acme.Sub', name: 'go', annotations: ['@Override'], params: [{ name: 'a', type: 'int', varargs: false }] })] });
     const subFile = jFile('src/Sub.java', [sub]);
     const td = typeDiff({ status: 'modified', oldType: jType({ fqn: P, members: [oldM] }), newType: baseNew, file: 'src/Base.java', oldFile: file, newFile: file, members: [memberDiff({ status: 'signatureChanged', oldMember: oldM, newMember: newM, flags: ['params'] })] });
     const index = new FakeRepoIndex({

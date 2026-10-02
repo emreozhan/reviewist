@@ -2,12 +2,11 @@ import type { FileChange, TypeChange } from '../../../../src/shared/types';
 import { PropagationBadges } from '../../components/PropagationBadges';
 import { RiskBadge } from '../../components/RiskBadge';
 import { StatusGlyph } from '../../components/StatusGlyph';
-import { JAVA_KEYWORD, KIND_LABEL, STATUS_ORDER } from '../../lib/labels';
+import { JAVA_KEYWORD, KIND_LABEL } from '../../lib/labels';
 import { shortId } from '../../lib/reviewIndex';
 import { useUi } from '../../state/uiStore';
-import { MemberRow } from './MemberRow';
 
-interface TypeBlockProps {
+interface TypeHeadProps {
   type: TypeChange;
   file: FileChange;
 }
@@ -16,23 +15,14 @@ function superList(list: string[] | undefined): string {
   return (list ?? []).map(shortId).join(', ');
 }
 
-/** Tip iskeleti: başlık (tür, ad, üst tipler, durum, risk) ve üyeler; değişmeyen üyeler soluk ve katlı. */
-export function TypeBlock({ type, file }: TypeBlockProps) {
-  const showUnchanged = useUi((s) => s.showUnchanged);
-  const toggleUnchanged = useUi((s) => s.toggleShowUnchanged);
+/** Tip kartının başlığı: tür, ad, üst tipler, durum, risk ve tip düzeyi ayrıntılar. Üyeler ayrı satırlarda (StructureView). */
+export function TypeHead({ type, file }: TypeHeadProps) {
   const selected = useUi((s) => s.selectedSymbolId === type.id);
   const selectSymbol = useUi((s) => s.selectSymbol);
-
-  const changed = type.members.filter((m) => m.status !== 'unchanged');
-  const unchangedCount = type.members.length - changed.length;
-  const sortedChanged = [...changed].sort((a, b) => STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status) || b.risk.score - a.risk.score);
-  // Değişmeyenler gösterilince kaynak sırasına dön (iskelet okuması); gizliyken önem sırası.
-  const startOf = (m: (typeof type.members)[number]) => (m.newRange ?? m.oldRange)?.startLine ?? 0;
-  const members = showUnchanged ? [...type.members].sort((a, b) => startOf(a) - startOf(b)) : sortedChanged;
   const supersChanged = type.oldSuperTypes && superList(type.oldSuperTypes) !== superList(type.superTypes);
 
   return (
-    <section className={`tblock st-line--${type.status}`} aria-label={`${KIND_LABEL[type.kind]} ${type.name}`}>
+    <div className="tblock" aria-label={`${KIND_LABEL[type.kind]} ${type.name}`}>
       <button type="button" className={`tblock__head${selected ? ' is-selected' : ''}`} onClick={() => selectSymbol(type.id, file.id)}>
         <StatusGlyph status={type.status} />
         <span className="tblock__decl">
@@ -57,16 +47,6 @@ export function TypeBlock({ type, file }: TypeBlockProps) {
           ))}
         </ul>
       )}
-      <ul className="tblock__members">
-        {members.map((m) => (
-          <MemberRow key={m.id} member={m} file={file} />
-        ))}
-      </ul>
-      {unchangedCount > 0 && (
-        <button type="button" className="tblock__more" aria-pressed={showUnchanged} onClick={toggleUnchanged}>
-          {showUnchanged ? 'Değişmeyen üyeleri gizle' : `Değişmeyen ${unchangedCount} üyeyi göster`}
-        </button>
-      )}
-    </section>
+    </div>
   );
 }

@@ -6,7 +6,9 @@ import { getApi } from '../lib/api';
 import { splitLines } from '../lib/lcs';
 import { buildIndex } from '../lib/reviewIndex';
 import type { ReviewIndex } from '../lib/reviewIndex';
+import { yieldToPaint } from '../lib/yieldToPaint';
 import { useApiMode } from '../state/apiMode';
+import { useLoad } from '../state/loadStore';
 
 export function useApi(): { api: ReviewApi; mock: boolean } {
   const mock = useApiMode((s) => s.mock);
@@ -41,9 +43,31 @@ export function useReviewList() {
   return useQuery({ queryKey: queryKeys.reviews(mock), queryFn: () => api.listReviews() });
 }
 
+/** Ağır işler (ayrıştırma sonrası indeks) ekrana ilerleme çizilebilsin diye kare sonrasına bırakılır. */
+export async function prepareIndex(review: ReviewModel, onIndex?: () => void): Promise<ReviewIndex> {
+  onIndex?.();
+  await yieldToPaint();
+  return getIndex(review);
+}
+
 export function useReview(id: string) {
   const { api, mock } = useApi();
-  return useQuery({ queryKey: queryKeys.review(mock, id), queryFn: () => api.getReview(id), staleTime: Infinity });
+  return useQuery({
+    queryKey: queryKeys.review(mock, id),
+    queryFn: async ({ signal }) => {
+      const load = useLoad.getState();
+      try {
+        const review = await api.getReview(id, { signal, onProgress: (p) => load.report(id, p) });
+        await prepareIndex(review, () => load.report(id, { phase: 'index', loaded: 0 }));
+        return review;
+      } finally {
+        useLoad.getState().clear(id);
+      }
+    },
+    staleTime: Infinity,
+    // Onlarca MB'lık modelde derin karşılaştırma pahalı ve gereksiz (model değişmez).
+    structuralSharing: false,
+  });
 }
 
 /** Dosyanın tam içeriği (satırlara bölünmüş). İçerik yoksa `lines` null. */

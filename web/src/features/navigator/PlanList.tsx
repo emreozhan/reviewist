@@ -1,41 +1,60 @@
-import { planView } from '../../lib/selectors';
+import { useMemo } from 'react';
+import { VirtualList } from '../../components/VirtualList';
+import type { PlanFold, PlanRow } from '../../lib/selectors';
+import { planRows, planView } from '../../lib/selectors';
 import { useUi } from '../../state/uiStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { PlanStepItem } from './PlanStepItem';
 
+const rowKey = (r: PlanRow) => r.key;
+
+/** Ölçülmemiş satır tahmini: gerekçe ~45 karakter/satır, sembol çipleri dar gezginde satır başına ~2. Yakın tahmin kaydırma çubuğunun zıplamasını azaltır. */
+function estimate(r: PlanRow): number {
+  if (r.kind === 'fold') return 52;
+  const step = r.entry.step;
+  const reasonLines = step?.reason ? Math.ceil(step.reason.length / 45) : 0;
+  const chips = Math.min(step?.symbolIds.length ?? 0, 9);
+  return 44 + reasonLines * 17 + (chips > 0 ? Math.ceil(chips / 2) * 24 + 6 : 0);
+}
+
+function FoldRow({ fold, open }: { fold: PlanFold; open: boolean }) {
+  const toggle = useUi((s) => s.toggleFold);
+  return (
+    <div className={`plan-fold plan-fold--${fold.key}`}>
+      <button type="button" className="plan-fold__toggle" aria-expanded={open} onClick={() => toggle(fold.key)}>
+        <span className="plan-fold__caret" aria-hidden="true">{open ? '▾' : '▸'}</span>
+        <span className="plan-fold__text">
+          <span className="plan-fold__title">{fold.title}</span>
+          {fold.breakdown && <span className="plan-fold__sub">{fold.breakdown}</span>}
+          {!open && <span className="plan-fold__sub">katlı · j/k ve n bu adımları atlar</span>}
+        </span>
+        <span className="gauge plan-fold__count">{fold.entries.length}</span>
+      </button>
+    </div>
+  );
+}
+
 export function PlanList() {
   const { review, index } = useReviewCtx();
   const filters = useUi((s) => s.filters);
-  const showCosmetic = useUi((s) => s.showCosmeticSection);
-  const toggleCosmetic = useUi((s) => s.toggleCosmeticSection);
-  const view = planView(review, index, filters);
+  const openFolds = useUi((s) => s.openFolds);
+  const selected = useUi((s) => s.selectedFileId);
+  const view = useMemo(() => planView(review, index, filters), [review, index, filters]);
+  const rows = useMemo(() => planRows(view, openFolds), [view, openFolds]);
 
-  if (view.main.length === 0 && view.cosmetic.length === 0) {
+  if (rows.length === 0) {
     return <p className="nav__empty">Filtrelerle eşleşen dosya yok.</p>;
   }
 
   return (
-    <>
-      <ol className="plan" aria-label="Okuma planı">
-        {view.main.map((e) => (
-          <PlanStepItem key={e.file.id} entry={e} />
-        ))}
-      </ol>
-      {view.cosmetic.length > 0 && (
-        <div className="plan-cosmetic">
-          <button type="button" className="plan-cosmetic__toggle" aria-expanded={showCosmetic} onClick={toggleCosmetic}>
-            <span aria-hidden="true">{showCosmetic ? '▾' : '▸'}</span> Kozmetik — güvenle atlanabilir
-            <span className="gauge">{view.cosmetic.length}</span>
-          </button>
-          {showCosmetic && (
-            <ol className="plan" aria-label="Kozmetik dosyalar">
-              {view.cosmetic.map((e) => (
-                <PlanStepItem key={e.file.id} entry={e} />
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
-    </>
+    <VirtualList<PlanRow>
+      className="plan"
+      ariaLabel="Okuma planı"
+      items={rows}
+      itemKey={rowKey}
+      estimate={estimate}
+      activeKey={selected}
+      renderItem={(r) => (r.kind === 'fold' ? <FoldRow fold={r.fold} open={r.open} /> : <PlanStepItem entry={r.entry} />)}
+    />
   );
 }

@@ -30,15 +30,23 @@ export function makeRisk(reasons: RiskReason[], scoreOverride?: number): RiskInf
   return { score, level: riskLevel(score), reasons };
 }
 
-/** 'com.acme.Outer.Inner' → 'Inner' */
+/** Çift FQN'de modele eklenen '@kaynak kökü' sonekini atar ('a.B@android/src' → 'a.B'). */
+function withoutRoot(fqn: string): string {
+  const at = fqn.indexOf('@');
+  return at < 0 ? fqn : fqn.slice(0, at);
+}
+
+/** 'com.acme.Outer.Inner' → 'Inner' ('@kök' soneki yok sayılır) */
 export function simpleTypeName(fqn: string): string {
-  const i = fqn.lastIndexOf('.');
-  return i >= 0 ? fqn.slice(i + 1) : fqn;
+  const base = withoutRoot(fqn);
+  const i = base.lastIndexOf('.');
+  return i >= 0 ? base.slice(i + 1) : base;
 }
 
 export function packageOf(fqn: string): string {
-  const i = fqn.lastIndexOf('.');
-  return i >= 0 ? fqn.slice(0, i) : '';
+  const base = withoutRoot(fqn);
+  const i = base.lastIndexOf('.');
+  return i >= 0 ? base.slice(0, i) : '';
 }
 
 /** Okunur etiket: 'com.acme.OrderService#place(Order,int)' → 'OrderService.place', tip → basit ad. */

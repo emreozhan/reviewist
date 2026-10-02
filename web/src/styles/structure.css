@@ -1,18 +1,42 @@
 /* Yapı görünümü: tip iskeleti ve üyeler */
 
 .structure {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
   max-width: 1100px;
   padding: 16px 20px 48px;
 }
 
-.tblock {
-  border: 1px solid var(--line);
-  border-top: 2px solid var(--st);
-  border-radius: var(--r-md);
+/* Tip kartı ardışık satırlardan oluşur (pencereleme için): başlık, üyeler, "değişmeyenler" düğmesi. */
+.tbrow--type:not(.is-first) {
+  padding-top: 18px;
+}
+
+.tbcard {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  border-left: 1px solid var(--line);
   background: var(--surface);
+}
+
+.tbrow--type > .tbcard {
+  border-top: 2px solid var(--st);
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
+.tbrow--type:not(.is-last) > .tbcard {
+  border-bottom: 1px solid var(--line);
+}
+
+.tbrow.is-last > .tbcard {
+  border-bottom: 1px solid var(--line);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+.tbrow--type.is-last > .tbcard {
+  border-radius: var(--r-md);
+}
+
+.tbrow.is-last .member {
+  border-bottom: 0;
 }
 
 .tblock__head {
@@ -86,17 +110,9 @@
   color: var(--text-faint);
 }
 
-.tblock__members {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border-top: 1px solid var(--line);
-}
-
 .tblock__more {
   width: 100%;
   padding: 7px 14px;
-  border-top: 1px dashed var(--line);
   color: var(--text-dim);
   font-size: var(--fs-xs);
   text-align: left;
@@ -111,10 +127,6 @@
 .member {
   position: relative;
   border-bottom: 1px solid var(--line);
-}
-
-.member:last-child {
-  border-bottom: 0;
 }
 
 .member::before {

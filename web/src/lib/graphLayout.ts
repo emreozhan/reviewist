@@ -15,6 +15,9 @@ export interface GraphFilter {
 /** Bu düğüm sayısının üstünde varsayılan olarak filtreli açılır. */
 export const LARGE_GRAPH = 120;
 
+/** Varsayılan grup seçiminde tercih edilen en fazla sembol sayısı. */
+export const DEFAULT_GROUP_MAX_SYMBOLS = 150;
+
 /** Gösterilen düğüm bu sayıyı aşarsa kullanıcı uyarılır. */
 export const HEAVY_GRAPH = 300;
 
@@ -26,7 +29,9 @@ export function defaultGraphFilter(review: ReviewModel, selectedSymbolId?: strin
   const base: GraphFilter = { groupId: null, onlyHighRisk: false, hops: 1, hideContains: true };
   const own = selectedSymbolId ? review.groups.find((g) => g.symbolIds.includes(selectedSymbolId)) : undefined;
   if (own) return { ...base, groupId: own.id };
-  const top = [...review.groups].sort((a, b) => RISK_RANK[b.riskLevel] - RISK_RANK[a.riskLevel] || b.symbolIds.length - a.symbolIds.length)[0];
+  // Dev gruplar (yüzlerce sembol) yerleşimi saniyelerce kilitler: varsayılanda okunur boyuttaki en riskli grup seçilir.
+  const ranked = [...review.groups].sort((a, b) => RISK_RANK[b.riskLevel] - RISK_RANK[a.riskLevel] || b.symbolIds.length - a.symbolIds.length);
+  const top = ranked.find((g) => g.symbolIds.length <= DEFAULT_GROUP_MAX_SYMBOLS) ?? ranked[0];
   if (top) return { ...base, groupId: top.id };
   return review.graph.nodes.length > LARGE_GRAPH ? { ...base, onlyHighRisk: true } : base;
 }

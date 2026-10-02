@@ -4,16 +4,31 @@
 import { diffLines } from 'diff';
 import type { ChangeFlag, ChangeStatus, MemberChange, RiskInfo, TypeChange } from '../../shared/types.js';
 import type { JavaFileModel, JavaMember, JavaType, MemberDiff, TypeDiff } from './model.js';
-import { eraseTypeForId, simpleName } from './names.js';
+import {
+  eraseTypeForId,
+  isTestPath,
+  normalizeVarargs,
+  renameTypeVars,
+  simpleName,
+  typeParamNames,
+  typeVarMap,
+} from './names.js';
 
 export interface DiffFileOptions {
   oldPath?: string;
   newPath?: string;
+  /**
+   * (Tur 3, B7) Dosya git'te yeniden adlandırıldı/taşındı (R%). true ise ve her iki tarafta tek üst düzey tip varsa
+   * tipler benzerlik eşiğinden bağımsız eşlenir (`renamed`/`moved`); iç tipleri de dış tipe göre göreli adla eşlenir.
+   */
+  fileRenamed?: boolean;
 }
 
 const RENAME_THRESHOLD = 0.85;
 const TYPE_MATCH_THRESHOLD = 0.6;
 const TRIVIAL_TOKENS = 4;
+/** B6: farklı ad / tipler arası eşleşmede gövde en az bu kadar token olmalı (ya da imza şekli aynı olmalı). */
+const MIN_MOVE_TOKENS = 15;
 const VISIBILITY_MODS = new Set(['public', 'protected', 'private']);
 
 function emptyRisk(): RiskInfo {
@@ -120,6 +135,29 @@ function isTrivial(m: JavaMember): boolean {
   return bagOf(m).tokenCount < TRIVIAL_TOKENS;
 }
 
+/** Aynı tür, aynı (silinmiş) parametre tipleri ve aynı dönüş/alan tipi. */
+function sameShape(a: JavaMember, b: JavaMember): boolean {
+  if (a.kind !== b.kind || a.params.length !== b.params.length) return false;
+  for (let i = 0; i < a.params.length; i++) {
+    const pa = normalizeVarargs(eraseTypeForId((a.params[i] as { type: string }).type));
+    const pb = normalizeVarargs(eraseTypeForId((b.params[i] as { type: string }).type));
+    if (pa !== pb) return false;
+  }
+  const ra = a.returnType ? eraseTypeForId(a.returnType) : '';
+  const rb = b.returnType ? eraseTypeForId(b.returnType) : '';
+  const fa = a.fieldType ? eraseTypeForId(a.fieldType) : '';
+  const fb = b.fieldType ? eraseTypeForId(b.fieldType) : '';
+  return ra === rb && fa === fb;
+}
+
+/**
+ * B6: farklı ad veya farklı tip arasında eşleşme için gövde yeterince ayırt edici mi:
+ * her iki gövde en az MIN_MOVE_TOKENS token ya da imza şekli (parametre + dönüş tipi) aynı.
+ */
+function significantPair(a: JavaMember, b: JavaMember): boolean {
+  return (bagOf(a).tokenCount >= MIN_MOVE_TOKENS && bagOf(b).tokenCount >= MIN_MOVE_TOKENS) || sameShape(a, b);
+}
+
 interface Candidate<A, B> {
   a: A;
   b: B;
@@ -151,7 +189,7 @@ function similarityCandidates(olds: JavaMember[], news: JavaMember[], threshold:
       const bn = bagOf(n);
       if (upperBound(bo, bn) < threshold) continue;
       const s = memberSimilarity(o, n);
-      if (s >= threshold) cands.push({ a: o, b: n, score: s });
+      if (s >= threshold && significantPair(o, n)) cands.push({ a: o, b: n, score: s });
     }
   }
   const countA = new Map<JavaMember, number>();
@@ -194,7 +232,39 @@ function lineDelta(oldText: string, newText: string): { added: number; removed: 
 // Üye karşılaştırma
 // ---------------------------------------------------------------------------
 
+/** B9: sınıf tip değişkenleri (dış tipler dahil, dıştan içe) iki tarafta. */
+interface TvCtx {
+  oldVars: string[];
+  newVars: string[];
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
+/** Üye çifti için tip değişkeni normalizasyonu: adlar farklıysa pozisyonel yer tutucuya çeviren fonksiyonlar. */
+interface TvNorm {
+  active: boolean;
+  o: (t: string) => string;
+  n: (t: string) => string;
+}
+
+const IDENTITY_TV: TvNorm = { active: false, o: (t) => t, n: (t) => t };
+
+function tvNormFor(o: JavaMember, n: JavaMember, tv: TvCtx | undefined): TvNorm {
+  const om = typeParamNames(o.typeParams);
+  const nm = typeParamNames(n.typeParams);
+  const oc = tv?.oldVars ?? [];
+  const nc = tv?.newVars ?? [];
+  if (sameList(om, nm) && sameList(oc, nc)) return IDENTITY_TV;
+  const oMap = typeVarMap(oc, om);
+  const nMap = typeVarMap(nc, nm);
+  return { active: true, o: (t) => renameTypeVars(t, oMap), n: (t) => renameTypeVars(t, nMap) };
+}
+
 interface Comparison {
+  /** B9: yalnız tip değişkeni adları farklı (normalize edilince eşit) bir alan var. */
+  tvRenamed: boolean;
   sigFlags: ChangeFlag[];
   flags: ChangeFlag[];
   details: string[];
@@ -255,9 +325,10 @@ function compareModifiers(oldM: string[], newM: string[], details: string[]): bo
   return changed;
 }
 
-function compareParams(o: JavaMember, n: JavaMember, details: string[]): boolean {
-  const oTypes = o.params.map((p) => noWs(p.type));
-  const nTypes = n.params.map((p) => noWs(p.type));
+function compareParams(o: JavaMember, n: JavaMember, details: string[], tv: TvNorm = IDENTITY_TV): boolean {
+  const oTypes = o.params.map((p) => noWs(tv.o(p.type)));
+  const nTypes = n.params.map((p) => noWs(tv.n(p.type)));
+  const typeEq = (op: { type: string }, np: { type: string }): boolean => noWs(tv.o(op.type)) === noWs(tv.n(np.type));
   const typesChanged = oTypes.length !== nTypes.length || oTypes.some((t, i) => t !== nTypes[i]);
   const oldByName = new Map(o.params.map((p) => [p.name, p]));
   const newByName = new Map(n.params.map((p) => [p.name, p]));
@@ -269,11 +340,11 @@ function compareParams(o: JavaMember, n: JavaMember, details: string[]): boolean
     o.params.forEach((op, i) => {
       const np = n.params[i];
       if (!np) return;
-      if (op.name !== np.name && noWs(op.type) !== noWs(np.type)) {
+      if (op.name !== np.name && !typeEq(op, np)) {
         local.push(`parametre: ${op.type} ${op.name} → ${np.type} ${np.name}`);
       } else if (op.name !== np.name) {
         local.push(`parametre adı: ${op.name} → ${np.name}`);
-      } else if (noWs(op.type) !== noWs(np.type)) {
+      } else if (!typeEq(op, np)) {
         local.push(`parametre tipi: ${op.type} → ${np.type} (${np.name})`);
       }
     });
@@ -282,7 +353,7 @@ function compareParams(o: JavaMember, n: JavaMember, details: string[]): boolean
     for (const p of removed) local.push(`parametre kaldırıldı: ${p.type} ${p.name}`);
     for (const np of n.params) {
       const op = oldByName.get(np.name);
-      if (op && noWs(op.type) !== noWs(np.type)) local.push(`parametre tipi: ${op.type} → ${np.type} (${np.name})`);
+      if (op && !typeEq(op, np)) local.push(`parametre tipi: ${op.type} → ${np.type} (${np.name})`);
     }
     const commonOld = o.params.filter((p) => newByName.has(p.name)).map((p) => p.name);
     const commonNew = n.params.filter((p) => oldByName.has(p.name)).map((p) => p.name);
@@ -292,18 +363,18 @@ function compareParams(o: JavaMember, n: JavaMember, details: string[]): boolean
   return typesChanged;
 }
 
-function compareThrows(oldT: string[], newT: string[], details: string[]): boolean {
-  const o = new Set(oldT.map(noWs));
-  const n = new Set(newT.map(noWs));
+function compareThrows(oldT: string[], newT: string[], details: string[], tv: TvNorm = IDENTITY_TV): boolean {
+  const o = new Set(oldT.map((t) => noWs(tv.o(t))));
+  const n = new Set(newT.map((t) => noWs(tv.n(t))));
   let changed = false;
   for (const t of newT) {
-    if (!o.has(noWs(t))) {
+    if (!o.has(noWs(tv.n(t)))) {
       details.push(`throws eklendi: ${t}`);
       changed = true;
     }
   }
   for (const t of oldT) {
-    if (!n.has(noWs(t))) {
+    if (!n.has(noWs(tv.o(t)))) {
       details.push(`throws kaldırıldı: ${t}`);
       changed = true;
     }
@@ -316,9 +387,17 @@ function shortText(s: string | undefined): string {
   return t.length > 40 ? `${t.slice(0, 37)}...` : t;
 }
 
-function compareMembers(o: JavaMember, n: JavaMember, delta: { added: number; removed: number }): Comparison {
+function compareMembers(
+  o: JavaMember,
+  n: JavaMember,
+  delta: { added: number; removed: number },
+  tvCtx?: TvCtx,
+): Comparison {
   const details: string[] = [];
   const sigFlags: ChangeFlag[] = [];
+  const tv = tvNormFor(o, n, tvCtx);
+  const tvo = (t: string | undefined): string => noWs(t === undefined ? undefined : tv.o(t));
+  const tvn = (t: string | undefined): string => noWs(t === undefined ? undefined : tv.n(t));
   if (o.name !== n.name && o.kind !== 'constructor') details.push(`ad değişti: ${o.name} → ${n.name}`);
   if (o.visibility !== n.visibility) {
     sigFlags.push('visibility');
@@ -326,24 +405,36 @@ function compareMembers(o: JavaMember, n: JavaMember, delta: { added: number; re
   }
   if (compareModifiers(o.modifiers, n.modifiers, details)) sigFlags.push('modifiers');
   if (compareAnnotations(o.annotations, n.annotations, details)) sigFlags.push('annotations');
-  if (compareParams(o, n, details)) sigFlags.push('params');
-  if (noWs(o.returnType) !== noWs(n.returnType)) {
+  if (compareParams(o, n, details, tv)) sigFlags.push('params');
+  if (tvo(o.returnType) !== tvn(n.returnType)) {
     sigFlags.push('returnType');
     details.push(`dönüş tipi: ${o.returnType ?? '-'} → ${n.returnType ?? '-'}`);
   }
-  if (compareThrows(o.throws, n.throws, details)) sigFlags.push('throws');
-  if (noWs(o.typeParams) !== noWs(n.typeParams)) {
+  if (compareThrows(o.throws, n.throws, details, tv)) sigFlags.push('throws');
+  if (tvo(o.typeParams) !== tvn(n.typeParams)) {
     sigFlags.push('typeParams');
     details.push(`tip parametreleri: ${o.typeParams ?? '-'} → ${n.typeParams ?? '-'}`);
   }
-  if (noWs(o.fieldType) !== noWs(n.fieldType) && (o.kind === 'field' || n.kind === 'field')) {
+  if (tvo(o.fieldType) !== tvn(n.fieldType) && (o.kind === 'field' || n.kind === 'field')) {
     sigFlags.push('fieldType');
     details.push(`alan tipi: ${o.fieldType ?? '-'} → ${n.fieldType ?? '-'}`);
   }
   const flags: ChangeFlag[] = [...sigFlags];
-  const bodyChanged = o.normalizedBody !== n.normalizedBody;
-  const normalizedChanged = o.normalizedText !== n.normalizedText;
-  const textChanged = o.text !== n.text;
+  let bodyChanged = o.normalizedBody !== n.normalizedBody;
+  let normalizedChanged = o.normalizedText !== n.normalizedText;
+  let textChanged = o.text !== n.text;
+  let tvRenamed = false;
+  if (tv.active) {
+    // Tip değişkeni adı değişimi (T -> E) gövde/metin farkı sayılmaz; tokenlar üzerinde pozisyonel adla karşılaştır.
+    if (bodyChanged && tv.o(bodyTokens(o).join(' ')) === tv.n(bodyTokens(n).join(' '))) bodyChanged = false;
+    if (normalizedChanged && tv.o(o.normalizedText) === tv.n(n.normalizedText)) normalizedChanged = false;
+    if (textChanged && tv.o(o.text) === tv.n(n.text)) {
+      textChanged = false;
+      tvRenamed = true;
+    } else {
+      tvRenamed = o.normalizedText !== n.normalizedText && !normalizedChanged;
+    }
+  }
   const javadocChanged = (o.javadoc ?? '') !== (n.javadoc ?? '');
   if (bodyChanged) {
     if (o.kind === 'field') {
@@ -359,7 +450,7 @@ function compareMembers(o: JavaMember, n: JavaMember, delta: { added: number; re
     }
   }
   if (o.complexity !== n.complexity) details.push(`karmaşıklık ${o.complexity} → ${n.complexity}`);
-  return { sigFlags, flags, details, bodyChanged, textChanged, normalizedChanged, javadocChanged };
+  return { tvRenamed, sigFlags, flags, details, bodyChanged, textChanged, normalizedChanged, javadocChanged };
 }
 
 function baseChange(m: JavaMember, ownerTypeId: string, status: ChangeStatus): MemberChange {
@@ -398,9 +489,15 @@ function removedDiff(o: JavaMember, ownerTypeId: string): MemberDiff {
 }
 
 /** Eşleşmiş iki üyeden MemberDiff üretir. forced: renamed / moved. */
-function pairDiff(o: JavaMember, n: JavaMember, ownerTypeId: string, forced?: 'renamed' | 'moved'): MemberDiff {
+function pairDiff(
+  o: JavaMember,
+  n: JavaMember,
+  ownerTypeId: string,
+  forced?: 'renamed' | 'moved',
+  tv?: TvCtx,
+): MemberDiff {
   const delta = lineDelta(fullText(o), fullText(n));
-  const cmp = compareMembers(o, n, delta);
+  const cmp = compareMembers(o, n, delta, tv);
   let status: ChangeStatus;
   const flags = [...cmp.flags];
   const details = [...cmp.details];
@@ -421,8 +518,12 @@ function pairDiff(o: JavaMember, n: JavaMember, ownerTypeId: string, forced?: 'r
       details.push('javadoc değişti');
     }
     if (details.length === 0) details.push('bildirim değişti');
-  } else if (cmp.textChanged || cmp.javadocChanged) {
+  } else if (cmp.textChanged || cmp.javadocChanged || cmp.tvRenamed) {
     status = 'cosmetic';
+    if (cmp.tvRenamed) {
+      flags.push('formatting');
+      details.push('tip parametresi adı değişti');
+    }
     if (cmp.textChanged) {
       flags.push('formatting');
       details.push('yalnızca biçim/boşluk');
@@ -464,9 +565,10 @@ function localKey(m: JavaMember): string {
   return rest;
 }
 
-function paramScore(o: JavaMember, n: JavaMember): number {
-  const ot = o.params.map((p) => eraseTypeForId(p.type));
-  const nt = n.params.map((p) => eraseTypeForId(p.type));
+function paramScore(o: JavaMember, n: JavaMember, tv?: TvCtx): number {
+  const norm = tvNormFor(o, n, tv);
+  const ot = o.params.map((p) => eraseTypeForId(norm.o(p.type)));
+  const nt = n.params.map((p) => eraseTypeForId(norm.n(p.type)));
   if (ot.length === 0 && nt.length === 0) return 1;
   const counts = new Map<string, number>();
   for (const t of ot) counts.set(t, (counts.get(t) ?? 0) + 1);
@@ -485,7 +587,7 @@ function paramScore(o: JavaMember, n: JavaMember): number {
   return 0.6 * typeSim + 0.4 * nameSim;
 }
 
-function matchMembers(olds: JavaMember[], news: JavaMember[], ownerTypeId: string): MemberDiff[] {
+function matchMembers(olds: JavaMember[], news: JavaMember[], ownerTypeId: string, tv?: TvCtx): MemberDiff[] {
   const pairs = new Map<JavaMember, { o: JavaMember; forced?: 'renamed' }>(); // new -> old
   const usedOld = new Set<JavaMember>();
 
@@ -527,7 +629,7 @@ function matchMembers(olds: JavaMember[], news: JavaMember[], ownerTypeId: strin
     const cands: Candidate<JavaMember, JavaMember>[] = [];
     for (const o of os) {
       for (const n of ns) {
-        const score = 0.7 * paramScore(o, n) + 0.3 * memberSimilarity(o, n);
+        const score = 0.7 * paramScore(o, n, tv) + 0.3 * memberSimilarity(o, n);
         if (score >= 0.3) cands.push({ a: o, b: n, score });
       }
     }
@@ -558,7 +660,7 @@ function matchMembers(olds: JavaMember[], news: JavaMember[], ownerTypeId: strin
   });
   news.forEach((n, i) => {
     const p = pairs.get(n);
-    const md = p ? pairDiff(p.o, n, ownerTypeId, p.forced) : addedDiff(n, ownerTypeId);
+    const md = p ? pairDiff(p.o, n, ownerTypeId, p.forced, tv) : addedDiff(n, ownerTypeId);
     result.push({ key: i, md });
   });
   let lastPos = -1;
@@ -597,6 +699,18 @@ function superChanged(o: JavaType, n: JavaType): boolean {
   return oi.size !== ni.size || [...ni].some((i) => !oi.has(i));
 }
 
+/** Tipin ve (statik olmayan iç sınıfsa) dış tiplerinin tip değişkenleri, dıştan içe. */
+function classVarsOf(t: JavaType | undefined, file: JavaFileModel | undefined): string[] {
+  const chain: JavaType[] = [];
+  for (let cur = t; cur; ) {
+    chain.unshift(cur);
+    if (!cur.outerFqn || cur.modifiers.includes('static') || cur.kind !== 'class') break;
+    const outerFqn = cur.outerFqn;
+    cur = file?.types.find((x) => x.fqn === outerFqn);
+  }
+  return chain.flatMap((x) => typeParamNames(x.typeParams));
+}
+
 function compareTypeHeaders(o: JavaType, n: JavaType): { flags: ChangeFlag[]; details: string[]; changed: boolean } {
   const flags: ChangeFlag[] = [];
   const details: string[] = [];
@@ -612,8 +726,15 @@ function compareTypeHeaders(o: JavaType, n: JavaType): { flags: ChangeFlag[]; de
   if (compareModifiers(o.modifiers, n.modifiers, details)) flags.push('modifiers');
   if (compareAnnotations(o.annotations, n.annotations, details)) flags.push('annotations');
   if (noWs(o.typeParams) !== noWs(n.typeParams)) {
-    flags.push('typeParams');
-    details.push(`tip parametreleri: ${o.typeParams ?? '-'} → ${n.typeParams ?? '-'}`);
+    const ov = typeParamNames(o.typeParams);
+    const nv = typeParamNames(n.typeParams);
+    const on = renameTypeVars(o.typeParams ?? '', typeVarMap(ov, []));
+    const nn = renameTypeVars(n.typeParams ?? '', typeVarMap(nv, []));
+    if (noWs(on) === noWs(nn)) details.push(`tip parametresi adı değişti: ${o.typeParams ?? '-'} → ${n.typeParams ?? '-'}`);
+    else {
+      flags.push('typeParams');
+      details.push(`tip parametreleri: ${o.typeParams ?? '-'} → ${n.typeParams ?? '-'}`);
+    }
   }
   if ((o.superclass ?? '') !== (n.superclass ?? '')) {
     changed = true;
@@ -678,7 +799,8 @@ function buildTypeDiff(
   let flags: ChangeFlag[] = [];
   let details: string[] = [];
   if (oldT && newT) {
-    members = matchMembers(oldT.members, newT.members, id);
+    const tv: TvCtx = { oldVars: classVarsOf(oldT, oldFile), newVars: classVarsOf(newT, newFile) };
+    members = matchMembers(oldT.members, newT.members, id, tv);
     const hdr = compareTypeHeaders(oldT, newT);
     flags = hdr.flags;
     details = hdr.details;
@@ -804,6 +926,31 @@ export function diffJavaFile(
       matchedOld.add(o);
     }
   }
+  // B7: git yeniden adlandırması + iki tarafta tek üst düzey tip: eşik aranmadan eşle; iç tipleri göreli adla eşle.
+  if (opts.fileRenamed) {
+    const oldTop = oldTypes.filter((t) => !t.outerFqn);
+    const newTop = newTypes.filter((t) => !t.outerFqn);
+    const ot = oldTop[0];
+    const nt = newTop[0];
+    if (oldTop.length === 1 && newTop.length === 1 && ot && nt && !matchedOld.has(ot) && !pairOf.has(nt)) {
+      const kindOf = (o: JavaType, n: JavaType): 'renamed' | 'moved' =>
+        packageOf(o, oldModel) !== packageOf(n, newModel) ? 'moved' : 'renamed';
+      pairOf.set(nt, { o: ot, kind: kindOf(ot, nt) });
+      matchedOld.add(ot);
+      const oldByRel = new Map<string, JavaType>();
+      for (const o of oldTypes) {
+        if (o !== ot && !matchedOld.has(o) && o.fqn.startsWith(`${ot.fqn}.`)) oldByRel.set(o.fqn.slice(ot.fqn.length), o);
+      }
+      for (const n of newTypes) {
+        if (n === nt || pairOf.has(n) || !n.fqn.startsWith(`${nt.fqn}.`)) continue;
+        const o = oldByRel.get(n.fqn.slice(nt.fqn.length));
+        if (o && !matchedOld.has(o)) {
+          pairOf.set(n, { o, kind: kindOf(o, n) });
+          matchedOld.add(o);
+        }
+      }
+    }
+  }
   const restOld = oldTypes.filter((o) => !matchedOld.has(o));
   const restNew = newTypes.filter((n) => !pairOf.has(n));
   if (restOld.length && restNew.length) {
@@ -864,6 +1011,15 @@ export function detectCrossFileMoves(diffs: TypeDiff[]): void {
   if (removed.length === 0 || added.length === 0) return;
 
   const ownerOf = (l: Located): string => l.md.change.ownerTypeId;
+  const testSide = new Map<TypeDiff, boolean>();
+  const isTest = (l: Located): boolean => {
+    let v = testSide.get(l.td);
+    if (v === undefined) {
+      v = isTestPath(l.td.change.file);
+      testSide.set(l.td, v);
+    }
+    return v;
+  };
   const usedR = new Set<Located>();
   const usedA = new Set<Located>();
   const chosen: Candidate<Located, Located>[] = [];
@@ -883,7 +1039,9 @@ export function detectCrossFileMoves(diffs: TypeDiff[]): void {
       const br = bagOf(r.member);
       for (const a of pool) {
         if (ownerOf(a) === ownerOf(r) || a.td === r.td) continue;
+        if (isTest(a) !== isTest(r)) continue; // B6: test kökü <-> üretim kökü taşıması sayılmaz
         if (upperBound(br, bagOf(a.member)) < RENAME_THRESHOLD) continue;
+        if (!significantPair(r.member, a.member)) continue;
         const s = memberSimilarity(r.member, a.member);
         if (s >= RENAME_THRESHOLD) cands.push({ a: r, b: a, score: s });
       }
@@ -911,7 +1069,11 @@ export function detectCrossFileMoves(diffs: TypeDiff[]): void {
   for (const { a: r, b: a } of chosen) {
     const o = r.member;
     const n = a.member;
-    const moved = pairDiff(o, n, ownerOf(a), 'moved');
+    const tv: TvCtx = {
+      oldVars: classVarsOf(r.td.oldType, r.td.oldFile),
+      newVars: classVarsOf(a.td.newType, a.td.newFile),
+    };
+    const moved = pairDiff(o, n, ownerOf(a), 'moved', tv);
     const fromType = simpleName(ownerOf(r));
     const toType = simpleName(ownerOf(a));
     // aynı nesne referansını koru (TypeChange.members ile paylaşılıyor)

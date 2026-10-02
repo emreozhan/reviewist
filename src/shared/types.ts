@@ -63,6 +63,11 @@ export interface ChangeSet {
    * Desteklenmiyorsa boş dizi döner. `ext` verilirse yalnızca o uzantıdakiler (ör. '.java').
    */
   listFiles(side: 'new', ext?: string): Promise<string[]>;
+  /**
+   * (Tur 3, opsiyonel) İçeriğin kararlı kimliği (git blob SHA). Varsa core ayrıştırma sonucunu bununla önbellekler.
+   * Çalışma ağacındaki diske ait dosyalar için undefined.
+   */
+  blobId?(side: 'old' | 'new', path: string): Promise<string | undefined>;
 }
 
 // ---------------------------------------------------------------------------

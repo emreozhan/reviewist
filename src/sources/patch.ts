@@ -9,7 +9,7 @@ import { resolve } from 'node:path';
 import { applyPatch, reversePatch, type StructuredPatch } from 'diff';
 import {
   createSideResolver,
-  isBinaryBuffer,
+  isBinaryContent,
   patchStableKey,
   resolveInside,
   sanitizeRepoRelPath,
@@ -119,7 +119,7 @@ export async function createPatchChangeSet(opts: PatchChangeSetOptions): Promise
     if (!abs) return undefined;
     try {
       const buf = await readFile(abs);
-      return isBinaryBuffer(buf) ? undefined : buf.toString('utf8');
+      return isBinaryContent(buf, path) ? undefined : buf.toString('utf8');
     } catch {
       return undefined;
     }

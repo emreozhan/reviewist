@@ -4,7 +4,6 @@ import { Switch } from '../../components/Switch';
 import type { GraphFilter } from '../../lib/graphLayout';
 import { HEAVY_GRAPH } from '../../lib/graphLayout';
 import { RISK_LABEL } from '../../lib/labels';
-import { RISK_RANK } from '../../lib/selectors';
 import { useReviewCtx } from '../workspace/ReviewContext';
 
 interface GraphToolbarProps {
@@ -14,9 +13,9 @@ interface GraphToolbarProps {
 }
 
 export function GraphToolbar({ filter, onChange, shown }: GraphToolbarProps) {
-  const { review } = useReviewCtx();
+  const { review, index } = useReviewCtx();
   const selectId = useId();
-  const groups = [...review.groups].sort((a, b) => RISK_RANK[b.riskLevel] - RISK_RANK[a.riskLevel]);
+  const groups = index.groupsByRisk;
   const total = review.graph.nodes.length;
   const heavy = shown.nodes > HEAVY_GRAPH;
 

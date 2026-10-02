@@ -152,24 +152,6 @@
   gap: 6px;
 }
 
-.topbar__warnings {
-  padding: 4px 14px 6px;
-  border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--risk-medium) 6%, var(--bg));
-  color: var(--text-dim);
-  font-size: var(--fs-xs);
-}
-
-.topbar__warnings summary {
-  cursor: pointer;
-  color: var(--risk-medium);
-}
-
-.topbar__warnings ul {
-  margin: 4px 0 0;
-  padding-left: 18px;
-}
-
 @media (max-width: 1600px) {
   .topbar .mock-badge__sub {
     display: none;

@@ -6,6 +6,7 @@ import { ThemeToggle } from '../../components/ThemeToggle';
 import { useConfig } from '../../hooks/queries';
 import { navigate } from '../../lib/route';
 import { useApiMode } from '../../state/apiMode';
+import { useNotice } from '../../state/noticeStore';
 import { AnalysisProgress } from './AnalysisProgress';
 import { RecentReviews } from './RecentReviews';
 import { SourceTabs } from './SourceTabs';
@@ -21,6 +22,8 @@ export function SourcePage() {
   const create = useCreateReview();
   const mock = useApiMode((s) => s.mock);
   const enableMock = useApiMode((s) => s.enableMock);
+  const notice = useNotice((s) => s.notice);
+  const setNotice = useNotice((s) => s.setNotice);
   const failedKind = create.variables?.kind;
   const serverError: ServerFieldError | undefined =
     create.isError && isApiError(create.error) && create.error.field && failedKind && formHasField(failedKind, create.error.field)
@@ -34,6 +37,8 @@ export function SourcePage() {
     const id = config.data?.initialReviewId;
     if (id && !initialRedirectDone) {
       initialRedirectDone = true;
+      // Review açılamazsa (404) ReviewScreen buraya bilgi notuyla geri döner.
+      useNotice.getState().markInitialAttempt(id);
       navigate({ name: 'review', id, tab: 'workspace', params: {} }, true);
     }
   }, [config.data?.initialReviewId]);
@@ -64,6 +69,14 @@ export function SourcePage() {
 
         <div className="home__grid">
           <div className="home__source">
+            {notice && (
+              <div className="notice" role="status">
+                <span className="notice__text">{notice}</span>
+                <button type="button" className="icon-btn icon-btn--sm" onClick={() => setNotice(null)} aria-label="Bilgi notunu kapat" title="Kapat">
+                  ×
+                </button>
+              </div>
+            )}
             {config.isError && !mock && (
               <ErrorPanel
                 error={config.error}
@@ -84,7 +97,10 @@ export function SourcePage() {
                 <SourceTabs
                   config={config.data}
                   pending={create.isPending}
-                  onSubmit={(req) => create.mutate(req)}
+                  onSubmit={(req) => {
+                    setNotice(null);
+                    create.mutate(req);
+                  }}
                   serverError={serverError}
                   onEdit={clearServerError}
                 />

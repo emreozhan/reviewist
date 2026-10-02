@@ -38,7 +38,7 @@ describe('analiz işi', () => {
     const seen: AnalysisProgressState[] = [];
     const out = await runAnalysis(api, REQ, { signal: new AbortController().signal, onProgress: (p) => seen.push(p), sleep: noSleep });
     expect(out).toBe(MODEL);
-    expect(getReview).toHaveBeenCalledWith('rv1');
+    expect(getReview).toHaveBeenCalledWith('rv1', expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(getJob).toHaveBeenCalledTimes(3);
     expect(seen.map((s) => s.messages.map((m) => m.message).join(''))).toEqual(['a', 'ab', 'abc']);
     expect(seen.every((s) => s.mode === 'job')).toBe(true);

@@ -1,10 +1,11 @@
 import type { ApiError, AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
-import type { FileContentResponse, FileSide, ReviewApi } from './apiTypes';
+import type { FileContentResponse, FileSide, LoadProgress, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 import { mockApi } from './mockApi';
+import { yieldToPaint } from './yieldToPaint';
 
 export { ApiRequestError, isApiError, isMissingEndpoint } from './apiTypes';
-export type { ReviewApi, FileSide, FileContentResponse } from './apiTypes';
+export type { ReviewApi, FileSide, FileContentResponse, LoadProgress, ProgressFn } from './apiTypes';
 
 function isApiErrorBody(value: unknown): value is ApiError {
   return typeof value === 'object' && value !== null && typeof (value as { error?: unknown }).error === 'string';
@@ -13,12 +14,57 @@ function isApiErrorBody(value: unknown): value is ApiError {
 /** Vite proxy'si arka uca ulaşamazsa 502/503/504 ya da HTML döner; bunları "erişilemez" sayarız. */
 const UNREACHABLE_STATUSES = new Set([502, 503, 504]);
 
-async function request<T>(endpoint: string, init?: RequestInit): Promise<T> {
+function isAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+/** İlerleme bildirimi en sık bu aralıkla yapılır (ms). */
+const PROGRESS_EVERY_MS = 100;
+
+/**
+ * Gövdeyi parça parça okuyup ilerleme bildirir, sonra bir kare çizdirip ayrıştırır.
+ * Sıkıştırılmış yanıtta (Content-Encoding) Content-Length sıkıştırılmış boyuttur; toplam bilinmez sayılır.
+ */
+async function readJsonWithProgress<T>(res: Response, endpoint: string, onProgress: ProgressFn): Promise<T> {
+  const body = res.body;
+  if (!body) return (await res.json()) as T;
+  const encoded = !!res.headers.get('content-encoding');
+  const len = Number(res.headers.get('content-length'));
+  const total = !encoded && Number.isFinite(len) && len > 0 ? len : undefined;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let loaded = 0;
+  let last = 0;
+  onProgress({ phase: 'download', loaded, total });
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    loaded += value.byteLength;
+    parts.push(decoder.decode(value, { stream: true }));
+    const now = performance.now();
+    if (now - last >= PROGRESS_EVERY_MS) {
+      last = now;
+      onProgress({ phase: 'download', loaded, total });
+    }
+  }
+  parts.push(decoder.decode());
+  const progress: LoadProgress = { phase: 'parse', loaded, total };
+  onProgress(progress);
+  await yieldToPaint();
+  try {
+    return JSON.parse(parts.join('')) as T;
+  } catch (error) {
+    throw new ApiRequestError('Sunucu yanıtı çözümlenemedi.', { kind: 'parse', endpoint, detail: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function request<T>(endpoint: string, init?: RequestInit, onProgress?: ProgressFn): Promise<T> {
   let res: Response;
   try {
     res = await fetch(endpoint, { ...init, headers: { Accept: 'application/json', ...(init?.body ? { 'Content-Type': 'application/json' } : {}), ...init?.headers } });
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
+    if (isAbort(error)) {
       throw new ApiRequestError('İstek iptal edildi.', { kind: 'aborted', endpoint });
     }
     throw new ApiRequestError('Reviewist sunucusuna ulaşılamadı.', {
@@ -50,8 +96,11 @@ async function request<T>(endpoint: string, init?: RequestInit): Promise<T> {
     throw new ApiRequestError('Sunucu JSON yerine farklı bir yanıt döndü; API çalışmıyor olabilir.', { kind: 'unreachable', endpoint, status: res.status });
   }
   try {
+    if (onProgress) return await readJsonWithProgress<T>(res, endpoint, onProgress);
     return (await res.json()) as T;
   } catch (error) {
+    if (error instanceof ApiRequestError) throw error;
+    if (isAbort(error)) throw new ApiRequestError('İstek iptal edildi.', { kind: 'aborted', endpoint });
     throw new ApiRequestError('Sunucu yanıtı çözümlenemedi.', { kind: 'parse', endpoint, detail: error instanceof Error ? error.message : String(error) });
   }
 }
@@ -59,8 +108,8 @@ async function request<T>(endpoint: string, init?: RequestInit): Promise<T> {
 export const realApi: ReviewApi = {
   getConfig: () => request<AppConfig>('/api/config'),
   getRefs: (repoPath) => request<GitRefs>(`/api/git/refs?repoPath=${encodeURIComponent(repoPath)}`),
-  createReview: (req: ReviewRequest, signal?: AbortSignal) =>
-    request<ReviewModel>('/api/reviews', { method: 'POST', body: JSON.stringify(req), signal }),
+  createReview: (req: ReviewRequest, signal?: AbortSignal, onProgress?: ProgressFn) =>
+    request<ReviewModel>('/api/reviews', { method: 'POST', body: JSON.stringify(req), signal }, onProgress),
   createJob: (req: ReviewRequest, signal?: AbortSignal) =>
     request<ReviewJob>('/api/jobs', { method: 'POST', body: JSON.stringify(req), signal }),
   getJob: (id: string, signal?: AbortSignal) => request<ReviewJob>(`/api/jobs/${encodeURIComponent(id)}`, { signal }),
@@ -68,7 +117,7 @@ export const realApi: ReviewApi = {
     await request<{ ok: true }>(`/api/reviews/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
   listReviews: () => request<ReviewListItem[]>('/api/reviews'),
-  getReview: (id) => request<ReviewModel>(`/api/reviews/${encodeURIComponent(id)}`),
+  getReview: (id, opts) => request<ReviewModel>(`/api/reviews/${encodeURIComponent(id)}`, { signal: opts?.signal }, opts?.onProgress),
   getFile: (id: string, path: string, side: FileSide) =>
     request<FileContentResponse>(`/api/reviews/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}&side=${side}`),
 };

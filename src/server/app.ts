@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono, type Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
+import { compress } from 'hono/compress';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type {
   ApiError,
@@ -118,6 +119,11 @@ export class ReviewStore {
       this.map.delete(oldestKey);
       if (e) this.retire(e);
     }
+  }
+
+  /** Depoda mı (LRU sırasını değiştirmez). */
+  has(id: string): boolean {
+    return this.map.has(id);
   }
 
   get(id: string): StoredReview | undefined {
@@ -371,6 +377,11 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
     return jobs.start(async (progress) => (await analyze(req, progress)).id);
   };
 
+  // --- sıkıştırma -------------------------------------------------------------
+  // ReviewModel JSON'u büyük olabilir (guava ~40 MB): Accept-Encoding'e göre gzip/deflate (Node CompressionStream).
+  // 1 KB altı yanıtlar ve sıkıştırılamaz türler (görsel vb.) olduğu gibi gider.
+  app.use('*', compress());
+
   // --- güvenlik --------------------------------------------------------------
   app.use('*', async (c, next) => {
     const host = c.req.header('host') ?? new URL(c.req.url).host;
@@ -394,7 +405,9 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
       githubTokenConfigured: resolveGithubToken(undefined, tokenEnvNames) !== undefined,
     };
     if (opts.defaultRepoPath) cfg.defaultRepoPath = opts.defaultRepoPath;
-    if (initialReviewId && store.get(initialReviewId)) cfg.initialReviewId = initialReviewId;
+    // Silinmiş ya da LRU'dan düşmüş review artık önerilmez (bir kez düşen id geri gelmez).
+    if (initialReviewId !== undefined && !store.has(initialReviewId)) initialReviewId = undefined;
+    if (initialReviewId !== undefined) cfg.initialReviewId = initialReviewId;
     return c.json(cfg);
   });
 

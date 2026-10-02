@@ -10,7 +10,8 @@ import { NavFilters } from './NavFilters';
 import { PlanList } from './PlanList';
 
 export function Navigator({ onCollapse }: { onCollapse: () => void }) {
-  const { review } = useReviewCtx();
+  const { index } = useReviewCtx();
+  const counts = index.findingCounts.total;
   const mode = useUi((s) => s.navMode);
   const setMode = useUi((s) => s.setNavMode);
 
@@ -31,13 +32,14 @@ export function Navigator({ onCollapse }: { onCollapse: () => void }) {
           options={[
             { value: 'plan', label: 'Okuma planı', title: 'Önerilen okuma sırası' },
             { value: 'layers', label: 'Katman', title: 'Katman → paket → dosya' },
-            { value: 'groups', label: 'Gruplar', title: 'Birbirine bağlı değişiklik kümeleri', badge: review.groups.length },
-            { value: 'findings', label: 'Bulgular', badge: review.findings.filter((f) => f.severity !== 'info').length },
+            { value: 'groups', label: 'Gruplar', title: 'Birbirine bağlı değişiklik kümeleri', badge: index.groupsByRisk.length },
+            { value: 'findings', label: 'Bulgular', title: 'Hata ve uyarılar', badge: counts.error + counts.warning },
           ]}
         />
       </div>
-      {mode !== 'findings' && <NavFilters />}
-      <div className="nav__body">
+      {mode !== 'findings' && <NavFilters mode={mode} />}
+      {/* Mod başına ayrı kaydırma kabı: başka modun kaydırma konumu taşınmaz. */}
+      <div className="nav__body" key={mode}>
         {mode === 'plan' && <PlanList />}
         {mode === 'layers' && <LayerTree />}
         {mode === 'groups' && <GroupList />}

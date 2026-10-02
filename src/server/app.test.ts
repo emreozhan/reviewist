@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync, inflateSync } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiError, AppConfig, ChangeSet, GitRefs, ReviewJob, ReviewListItem, ReviewModel } from '../shared/types.js';
 import type { ManagedChangeSet } from '../sources/common.js';
@@ -659,5 +660,88 @@ describe('statik arayüz', () => {
     const { app } = make();
     const res = await app.request('/');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('Tur 3: HTTP sıkıştırma ve initialReviewId', () => {
+  const bigModel = (cs: ChangeSet, id: string): ReviewModel => ({
+    id,
+    createdAt: new Date().toISOString(),
+    source: cs.info,
+    summary: {
+      files: 0,
+      javaFiles: 0,
+      testFiles: 0,
+      additions: 0,
+      deletions: 0,
+      typesChanged: 0,
+      membersChanged: 0,
+      publicApiChanges: 0,
+      cosmeticFiles: 0,
+      highRiskItems: 0,
+      impactedOutsideDiff: 0,
+      untestedChanges: 0,
+    },
+    files: [],
+    types: [],
+    graph: { nodes: [], edges: [] },
+    groups: [],
+    reviewPlan: [],
+    findings: [],
+    warnings: Array.from({ length: 2000 }, (_, i) => `uyarı ${i}: Türkçe metin ğüşıöç`),
+  });
+
+  it('Accept-Encoding gzip/deflate → sıkıştırılmış JSON; başlık yoksa ham', async () => {
+    const reviewist = make({
+      createChangeSet: async () => fakeChangeSet('cs', []),
+      buildReview: async (cs, o) => bigModel(cs, o?.id ?? 'x'),
+    });
+    const { app } = reviewist;
+    const m = await reviewist.createReview({ kind: 'patch', text: 'x' });
+    const raw = await app.request(`/api/reviews/${m.id}`);
+    expect(raw.headers.get('content-encoding')).toBeNull();
+    const rawText = await raw.text();
+    expect(JSON.parse(rawText)).toMatchObject({ id: m.id });
+
+    for (const enc of ['gzip', 'deflate'] as const) {
+      const res = await app.request(`/api/reviews/${m.id}`, { headers: { 'accept-encoding': enc } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-encoding')).toBe(enc);
+      expect(res.headers.get('vary')).toMatch(/accept-encoding/i);
+      const zipped = Buffer.from(await res.arrayBuffer());
+      expect(zipped.length).toBeLessThan(rawText.length / 5);
+      const plain = enc === 'gzip' ? gunzipSync(zipped) : inflateSync(zipped);
+      expect(plain.toString('utf8')).toBe(rawText);
+    }
+    // gzip öncelikli
+    const both = await app.request(`/api/reviews/${m.id}`, { headers: { 'accept-encoding': 'deflate, gzip' } });
+    expect(both.headers.get('content-encoding')).toBe('gzip');
+    // Not: c.json Content-Length koymadığından 1 KB eşiği uygulanmaz; küçük yanıtlar da sıkıştırılır (zararsız).
+    const cfg = await app.request('/api/config', { headers: { 'accept-encoding': 'gzip' } });
+    expect(JSON.parse(gunzipSync(Buffer.from(await cfg.arrayBuffer())).toString('utf8'))).toMatchObject({ version: '9.9.9' });
+  });
+
+  it("initialReviewId LRU'dan düşen review için döndürülmez", async () => {
+    let n = 0;
+    const reviewist = make({ maxReviews: 1, createChangeSet: async () => fakeChangeSet(`cs${++n}`, []) });
+    const { app } = reviewist;
+    const m1 = await reviewist.createReview({ kind: 'patch', text: 'x' });
+    reviewist.setInitialReviewId(m1.id);
+    expect((await body<AppConfig>(await app.request('/api/config'))).initialReviewId).toBe(m1.id);
+    await reviewist.createReview({ kind: 'patch', text: 'y' }); // m1 LRU'dan düşer
+    expect((await app.request(`/api/reviews/${m1.id}`)).status).toBe(404);
+    expect((await body<AppConfig>(await app.request('/api/config'))).initialReviewId).toBeUndefined();
+  });
+
+  it('config isteği LRU sırasını değiştirmez', async () => {
+    let n = 0;
+    const reviewist = make({ maxReviews: 2, createChangeSet: async () => fakeChangeSet(`cs${++n}`, []) });
+    const { app } = reviewist;
+    const m1 = await reviewist.createReview({ kind: 'patch', text: 'x' });
+    reviewist.setInitialReviewId(m1.id);
+    await reviewist.createReview({ kind: 'patch', text: 'y' });
+    await app.request('/api/config'); // m1'i "kullanılmış" yapmamalı
+    await reviewist.createReview({ kind: 'patch', text: 'z' }); // en eski (m1) düşer
+    expect((await body<AppConfig>(await app.request('/api/config'))).initialReviewId).toBeUndefined();
   });
 });

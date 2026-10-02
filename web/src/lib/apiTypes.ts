@@ -8,18 +8,35 @@ export interface FileContentResponse {
   content: string | null;
 }
 
+/** Büyük yanıtın yüklenme aşaması: indirme (bayt), JSON ayrıştırma, istemci indeksi kurma. */
+export interface LoadProgress {
+  phase: 'download' | 'parse' | 'index';
+  /** İndirilen (açılmış) bayt. */
+  loaded: number;
+  /** Toplam bayt; sunucu sıkıştırıyorsa (gzip) bilinmez. */
+  total?: number;
+}
+
+export type ProgressFn = (p: LoadProgress) => void;
+
+export interface LoadOptions {
+  signal?: AbortSignal;
+  onProgress?: ProgressFn;
+}
+
 /** Sunucu API'sinin istemci arayüzü; gerçek ve mock uygulaması aynı imzayı paylaşır. */
 export interface ReviewApi {
   getConfig(): Promise<AppConfig>;
   getRefs(repoPath: string): Promise<GitRefs>;
   /** Senkron analiz (eski uç; jobs desteklenmiyorsa yedek). */
-  createReview(req: ReviewRequest, signal?: AbortSignal): Promise<ReviewModel>;
+  createReview(req: ReviewRequest, signal?: AbortSignal, onProgress?: ProgressFn): Promise<ReviewModel>;
   /** Arka planda analiz işi başlatır (202). */
   createJob(req: ReviewRequest, signal?: AbortSignal): Promise<ReviewJob>;
   getJob(id: string, signal?: AbortSignal): Promise<ReviewJob>;
   deleteReview(id: string): Promise<void>;
   listReviews(): Promise<ReviewListItem[]>;
-  getReview(id: string): Promise<ReviewModel>;
+  /** Büyük model (onlarca MB) indirilirken `onProgress` ile ilerleme bildirilir. */
+  getReview(id: string, opts?: LoadOptions): Promise<ReviewModel>;
   getFile(id: string, path: string, side: FileSide): Promise<FileContentResponse>;
 }
 

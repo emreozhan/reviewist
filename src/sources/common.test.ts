@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   githubStableKey,
+  isBinaryContent,
   gitStableKey,
   normalizeRepoKeyPath,
   patchStableKey,
@@ -60,5 +61,40 @@ describe('stableKey', () => {
     // sha1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
     expect(patchStableKey('abc')).toBe('patch:a9993e364706');
     expect(patchStableKey('a\r\nb')).toBe(patchStableKey('a\nb'));
+  });
+});
+
+describe('isBinaryContent', () => {
+  const nulJava = (): Buffer => {
+    // commons-lang ClassUtilsOssFuzzTest.java benzeri: dize sabitlerinde çok sayıda NUL, geçerli UTF-8.
+    const body = 'class F {\n  String s = "' + 'a\u0000\u0000b\u0000'.repeat(400) + 'ş";\n}\n';
+    return Buffer.from(body, 'utf8');
+  };
+
+  it('NUL yoksa metin', () => {
+    expect(isBinaryContent(Buffer.from('class A {}\n'), 'A.java')).toBe(false);
+    expect(isBinaryContent(Buffer.from('a,b\n'), 'x.csv')).toBe(false);
+  });
+
+  it('NUL içeren ama geçerli UTF-8 .java metin sayılır; başka uzantıda ikili', () => {
+    expect(isBinaryContent(nulJava(), 'src/F.java')).toBe(false);
+    expect(isBinaryContent(nulJava(), 'src/F.JAVA')).toBe(false);
+    expect(isBinaryContent(nulJava(), 'res/f.dat')).toBe(true);
+    expect(isBinaryContent(nulJava(), undefined)).toBe(true);
+  });
+
+  it('.java uzantılı gerçek ikili (geçersiz UTF-8 yoğun) ikili sayılır', () => {
+    const bytes = Buffer.alloc(4000);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 151 + 7) % 256; // NUL + 0x80-0xff karışık
+    expect(isBinaryContent(bytes, 'Bozuk.java')).toBe(true);
+  });
+
+  it('UTF-16 kodlu .java ikili sayılır (UTF-8 olarak okunamaz)', () => {
+    expect(isBinaryContent(Buffer.from('class A { int x; }\n'.repeat(20), 'utf16le'), 'A.java')).toBe(true);
+  });
+
+  it('8000 bayt sınırında kesilen çok baytlı karakter geçersiz sayılmaz', () => {
+    const s = Buffer.concat([Buffer.from('\u0000' + 'x'.repeat(7997)), Buffer.from('ğğ', 'utf8')]);
+    expect(isBinaryContent(s, 'A.java')).toBe(false);
   });
 });

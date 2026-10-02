@@ -15,10 +15,80 @@ export function isCosmeticJava(status: string, oldModel: JavaFileModel | undefin
   if (oldModel.packageName !== newModel.packageName) return false;
   if (typeDiffs.some((td) => isSemanticChange(td.change.status))) return false;
   if (typeDiffs.some((td) => td.members.some((m) => isSemanticChange(m.change.status)))) return false;
+  // Tipsiz dosya (package-info / module-info): paket anotasyonu veya requires/exports değişikliği kod farkıdır.
+  if (typeDiffs.length === 0 && oldModel.normalizedCode !== newModel.normalizedCode) return false;
+  // Aynı basit adın import hedefi değiştiyse (javax → jakarta) kod aynı görünse de anlam değişir.
+  if (importRetargets(oldModel, newModel).length > 0) return false;
   const staticImports = (m: JavaFileModel) => m.imports.filter((i) => i.static).map((i) => `${i.name}${i.wildcard ? '.*' : ''}`).sort().join(',');
   // Statik import değişikliği, kod aynıyken bile hangi metodun çağrıldığını değiştirebilir.
   if (staticImports(oldModel) !== staticImports(newModel) && oldModel.normalizedCode !== newModel.normalizedCode) return false;
   return true;
+}
+
+export interface ImportRetarget {
+  /** Basit ad ('Entity'); wildcard importta '*'. */
+  name: string;
+  from: string;
+  to: string;
+}
+
+/** Anlam taşıyan (çalışma zamanı/çerçeve davranışını belirleyen) paketler: hedef değişimi orta risk. */
+const MEANINGFUL_IMPORT_PREFIXES = [
+  'javax.', 'jakarta.', 'org.springframework.', 'org.hibernate.', 'com.fasterxml.', 'org.junit.', 'org.mockito.',
+  'lombok.', 'io.micronaut.', 'io.quarkus.', 'java.', 'reactor.', 'io.reactivex.', 'org.slf4j.', 'org.aspectj.',
+];
+
+export function isMeaningfulImport(name: string): boolean {
+  return MEANINGFUL_IMPORT_PREFIXES.some((p) => name.startsWith(p));
+}
+
+function lastSegment(name: string): string {
+  const i = name.lastIndexOf('.');
+  return i >= 0 ? name.slice(i + 1) : name;
+}
+
+/** 'javax.persistence' ↔ 'jakarta.persistence': ilk segment dışında aynı. */
+function samePackageTail(a: string, b: string): boolean {
+  const ta = a.slice(a.indexOf('.') + 1);
+  const tb = b.slice(b.indexOf('.') + 1);
+  return a !== b && a.includes('.') && b.includes('.') && ta === tb;
+}
+
+/**
+ * Aynı basit adın farklı FQN'e bağlandığı import değişiklikleri (tekil importlar; statik importlar dahil) ve
+ * wildcard paket değişimi ('javax.persistence.*' → 'jakarta.persistence.*'). Yalnız sıralama veya kullanılmayan
+ * import ekleme/silme boş liste döner.
+ */
+export function importRetargets(oldModel: JavaFileModel, newModel: JavaFileModel): ImportRetarget[] {
+  const single = (m: JavaFileModel) => {
+    const out = new Map<string, string>();
+    for (const i of m.imports) if (!i.wildcard) out.set(`${i.static ? 'static ' : ''}${lastSegment(i.name)}`, i.name);
+    return out;
+  };
+  const a = single(oldModel);
+  const b = single(newModel);
+  const out: ImportRetarget[] = [];
+  // Kullanılmayan import (kodda basit adı geçmiyor) anlam taşımaz: kozmetik kalır.
+  const code = newModel.normalizedCode;
+  const used = (name: string) => new RegExp(`(^|[^\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(code);
+  for (const [key, from] of a) {
+    const to = b.get(key);
+    if (to !== undefined && to !== from && used(lastSegment(from))) out.push({ name: lastSegment(from), from, to });
+  }
+  const wild = (m: JavaFileModel) => new Set(m.imports.filter((i) => i.wildcard && !i.static).map((i) => i.name));
+  const wa = wild(oldModel);
+  const wb = wild(newModel);
+  const removed = [...wa].filter((x) => !wb.has(x));
+  const added = [...wb].filter((x) => !wa.has(x));
+  for (const r of removed) {
+    const to = added.find((x) => samePackageTail(r, x));
+    if (to) out.push({ name: '*', from: `${r}.*`, to: `${to}.*` });
+  }
+  return out;
+}
+
+export function describeRetarget(r: ImportRetarget): string {
+  return `import hedefi değişti: ${r.from} → ${r.to}`;
 }
 
 /** Java dışı dosya: hunk'larda yalnızca boşluk farkı var mı. */

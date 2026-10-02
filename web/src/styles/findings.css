@@ -44,18 +44,27 @@
   padding: 24px;
 }
 
-.findings__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-  gap: 18px;
-  max-width: 1500px;
-  padding: 20px 24px 48px;
-  align-items: start;
+.findings__shown {
+  margin-left: auto;
+  color: var(--text-faint);
 }
 
-.fgroup {
-  display: grid;
-  gap: 8px;
+.findings__bar .ffilter {
+  flex-basis: 100%;
+}
+
+.findings__list {
+  max-width: 980px;
+  padding: 4px 24px 48px;
+}
+
+.frow-cat {
+  padding-top: 18px;
+  padding-bottom: 8px;
+}
+
+.frow-card {
+  padding-bottom: 8px;
 }
 
 .fgroup__title {
@@ -63,6 +72,7 @@
   align-items: center;
   gap: 10px;
   margin: 0;
+  color: var(--text);
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-sm);
@@ -75,10 +85,6 @@
   color: var(--text-faint);
 }
 
-.fgroup__items {
-  display: grid;
-  gap: 8px;
-}
 
 /* Bulgu kartı */
 .fcard {

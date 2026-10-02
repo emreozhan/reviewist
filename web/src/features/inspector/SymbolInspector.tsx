@@ -2,7 +2,7 @@ import { SignatureDiff } from '../../components/SignatureDiff';
 import { StatusGlyph } from '../../components/StatusGlyph';
 import { FLAG_LABEL, KIND_LABEL, STATUS_META } from '../../lib/labels';
 import { symbolNoteKey } from '../../lib/persistence';
-import { baseName, symbolLabel } from '../../lib/reviewIndex';
+import { baseName, symbolTail } from '../../lib/reviewIndex';
 import { FindingCard } from '../findings/FindingCard';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { NoteEditor } from './NoteEditor';
@@ -30,7 +30,7 @@ export function SymbolInspector({ symbolId }: { symbolId: string }) {
           {KIND_LABEL[subject.kind]}
           {member && type && <> · <span className="insp__owner">{type.name}</span></>}
         </p>
-        <h2 className="insp__name">{member ? symbolLabel(index, symbolId).split('.').slice(-1)[0] : subject.name}</h2>
+        <h2 className="insp__name">{member ? symbolTail(index, symbolId) : subject.name}</h2>
         <p className="insp__where">
           <StatusGlyph status={subject.status} withLabel />
           {file && (

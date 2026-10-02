@@ -465,3 +465,28 @@ describe('createGithubChangeSet (yerel depo yolu)', () => {
     expect(cs.warnings[0]).toContain('ait değil');
   });
 });
+
+describe('createGithubChangeSet blobId (Tur 3)', () => {
+  it("API dosya listesindeki sha yeni taraf blob'udur; eski taraf ve diff dışı dosyalar undefined", async () => {
+    const shaA = '1'.repeat(40);
+    const shaR = '2'.repeat(40);
+    installFetch(
+      commonRoutes([
+        { filename: 'src/A.java', status: 'modified', additions: 1, deletions: 1, changes: 2, sha: shaA, patch: '@@ -1 +1 @@\n-a\n+b' },
+        { filename: 'src/Yeni.java', previous_filename: 'src/Eski.java', status: 'renamed', additions: 0, deletions: 0, changes: 0, sha: shaR },
+        { filename: 'src/Gone.java', status: 'removed', additions: 0, deletions: 1, changes: 1, sha: '3'.repeat(40), patch: '@@ -1 +0,0 @@\n-a' },
+        { filename: 'img/x.png', status: 'added', additions: 0, deletions: 0, changes: 0, sha: '4'.repeat(40) },
+        { filename: 'src/NoSha.java', status: 'added', additions: 1, deletions: 0, changes: 1, sha: null, patch: '@@ -0,0 +1 @@\n+a' },
+      ]),
+    );
+    const cs = track(await createGithubChangeSet({ url: 'https://github.com/acme/shop/pull/7' }));
+    expect(await cs.blobId?.('new', 'src/A.java')).toBe(shaA);
+    expect(await cs.blobId?.('new', 'src/Yeni.java')).toBe(shaR);
+    expect(await cs.blobId?.('old', 'src/A.java')).toBeUndefined();
+    expect(await cs.blobId?.('new', 'src/Gone.java')).toBeUndefined();
+    expect(await cs.blobId?.('new', 'src/Eski.java')).toBeUndefined();
+    expect(await cs.blobId?.('new', 'img/x.png')).toBeUndefined(); // ikili
+    expect(await cs.blobId?.('new', 'src/NoSha.java')).toBeUndefined();
+    expect(await cs.blobId?.('new', 'src/Diger.java')).toBeUndefined(); // tarball/diff dışı
+  });
+});

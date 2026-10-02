@@ -3,6 +3,8 @@
  */
 import type { CallRef, ChangeSetFile, FileChange } from '../../shared/types.js';
 import type { JavaFileModel, MemberDiff, RepoIndexApi, TypeDiff } from '../java/model.js';
+import type { ImportRetarget } from './cosmetic.js';
+import type { SymbolIds } from './symbolIds.js';
 import type { ArchitectureIssue } from './risk.js';
 
 export interface AnalyzedFile {
@@ -43,8 +45,19 @@ export interface AnalysisContext {
   types: Map<string, TypeEntry>;
   /** Üye id → head'de hâlâ eski ad/arity ile yapılan çağrılar. */
   staleCalls: Map<string, CallRef[]>;
-  /** Üye id → alt tiplerde eski imzayla kalan (artık override etmeyen) metot id'leri. */
+  /**
+   * Üye id → name-only güvenle bulunan (alıcı tipi çözülemeyen) olası bayat çağrı sayısı. Bulgu/risk üretmez;
+   * yalnızca tek bir özet bilgi bulgusunda sayılır.
+   */
+  unverifiedStaleCalls: Map<string, number>;
+  /** Üye id → alt tiplerde eski imzayla kalan, @Override taşıyan ve artık hiçbir şeyi override etmeyen (derlenmez) metot id'leri. */
   brokenOverrides: Map<string, string[]>;
+  /** Üye id → alt tiplerde eski imzayla kalan, @Override taşımayan ve artık hiçbir şeyi override etmeyen metot id'leri (bilgi). */
+  orphanedOverrides: Map<string, string[]>;
+  /** Tip id → import hedefi değişen basit adlar (javax.persistence.Entity → jakarta.persistence.Entity). */
+  importRetargets: Map<string, ImportRetarget[]>;
+  /** Model id ↔ indeks id dönüşümü (çift FQN'de '@kaynak kökü' soneki). */
+  ids: SymbolIds;
   /** Tip id → silinmiş/yeniden adlandırılmış tipe hâlâ referans veren head dosyaları. */
   staleTypeRefs: Map<string, string[]>;
   /** Sembol id (üye ya da tip) → bu değişiklikle gelen mimari ihlaller (risk katkısı için). */

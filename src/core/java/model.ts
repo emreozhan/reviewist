@@ -90,6 +90,19 @@ export interface JavaMember {
   complexity: number; // yaklaşık siklomatik karmaşıklık (1 + dallanmalar)
   features: CodeFeatures;
   initializerText?: string; // alan başlatıcısı
+  /**
+   * (Tur 3) Bildirim içindeki anonim sınıflar (`new I() { ... }`), kaynak sırasıyla (iç içe olanlar dahil); yoksa alan yok.
+   * RepoIndex bunları `overriddenBy` sonuçlarına sentetik id ile ekler: `${member.id}$anon${n}#${ad}(${parametreler})` (n 1 tabanlı).
+   * Sentetik id'ler `getMember` ile çözülmez.
+   */
+  anonymousClasses?: AnonymousClassInfo[];
+}
+
+/** (Tur 3) Anonim sınıf özeti. */
+export interface AnonymousClassInfo {
+  superType: string; // `new` ile verilen tip (generic silinmiş ham ad): 'Comparator', 'Outer.Listener'
+  line: number;
+  methods: { name: string; params: JavaParam[]; line: number }[];
 }
 
 export interface JavaType {
@@ -128,6 +141,12 @@ export interface JavaFileModel {
   lineCount: number;
   /** importlar hariç, yorum/boşluk normalize edilmiş dosya metni. */
   normalizedCode: string;
+  /**
+   * (Tur 3) Dosyada (string/yorum dışında) geçen, büyük harfle başlayan tanımlayıcılar: olası tip referansları
+   * (alan erişimi niteleyicisi `TimeZones.GMT`, statik çağrı alıcısı, anotasyon argümanı, `X.class`, generic, cast...).
+   * Önünde '.' olan tamamı büyük harfli adlar (sabitler: `Foo.MAX`) hariç. filesReferencingType bunu kullanır.
+   */
+  typeRefs?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +217,13 @@ export interface RepoIndexApi {
   findCallsTo(ownerFqn: string, name: string, argCount?: number): CallRef[];
   /** Tipi import eden veya basit adıyla kullanan dosyalar. */
   filesReferencingType(fqn: string): string[];
+  /**
+   * (Tur 3) Bir çağrı yerinin head'de bağlandığı hedef üye id'leri (fromId = çağıran üye, line = çağrı satırı, name = çağrılan ad).
+   * Bayat çağrı tespitinde: hedef head'de var olan bir üyeyse çağrı bayat değildir.
+   */
+  targetsOfCallSite(fromId: string, line: number, name: string): string[];
+  /** (Tur 3) Aynı FQN'i bildiren tüm tipler (guava flavor'ları gibi çok kaynak köklü repolar). */
+  typesByFqn(fqn: string): { type: JavaType; file: JavaFileModel }[];
 }
 
 /**

@@ -531,3 +531,10 @@
   align-items: center;
   gap: 8px;
 }
+
+.analysis__download {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 0 4px;
+}

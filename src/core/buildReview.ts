@@ -1,27 +1,29 @@
 /**
  * ChangeSet → ReviewModel. Reviewist analiz motorunun giriş noktası.
  *
- * Akış: dosya iskeletleri → Java ayrıştırma + semantik diff + dosyalar arası taşıma → repo indeksi →
- * zenginleştirme (kalıtım, çağıranlar, eski adla çağrılar) → kozmetik → katman → risk → test eşleme →
- * mimari → gruplama → okuma planı → etki grafiği → bulgular → özet.
+ * Akış: dosya iskeletleri → Java ayrıştırma (işçi havuzu + blob SHA önbelleği) + semantik diff + dosyalar arası taşıma →
+ * çift FQN id'leri ('@kök') → repo indeksi (değişen Java yoksa atlanır) → zenginleştirme (kalıtım, çağıranlar, bayat
+ * çağrılar) → import hedefi + kozmetik → katman → mimari → risk → test eşleme → gruplama → okuma planı → etki grafiği →
+ * bulgular → (büyük diff'te değişmeyen üyeleri iskelete indirme) → özet.
  * Bir dosyanın analizi patlarsa review patlamaz: FileChange.parseError + warnings.
  */
 import { randomUUID } from 'node:crypto';
 import type { ChangeSet, ChangeSetFile, FileChange, Finding, ReviewModel, TypeChange } from '../shared/types.js';
-import { detectCrossFileMoves, diffJavaFile, parseJavaFile, RepoIndex } from './java/index.js';
-import type { JavaFileModel, RepoIndexApi, TypeDiff } from './java/model.js';
+import { detectCrossFileMoves, diffJavaFile, parseJavaFiles, RepoIndex } from './java/index.js';
+import type { JavaFileModel, ParseItem, RepoIndexApi, TypeDiff } from './java/index.js';
 import { checkArchitecture } from './analysis/architecture.js';
 import type { AnalysisContext, AnalyzedFile } from './analysis/context.js';
-import { cosmeticFindings, isCosmeticJava, isWhitespaceOnly } from './analysis/cosmetic.js';
+import { cosmeticFindings, describeRetarget, importRetargets, isCosmeticJava, isWhitespaceOnly, type ImportRetarget } from './analysis/cosmetic.js';
 import { createEmptyIndex } from './analysis/emptyIndex.js';
 import { enrich, outsideCallerIds, registerSymbols } from './analysis/enrich.js';
-import { computeSummary, fileFindings, memberFindings, sortFindings, typeFindings } from './analysis/findings.js';
+import { computeSummary, fileFindings, memberFindings, sortFindings, typeFindings, unverifiedStaleFinding } from './analysis/findings.js';
 import { buildGraph } from './analysis/graph.js';
 import { buildGroups } from './analysis/grouping.js';
 import { createModuleResolver, detectLanguage, detectLayer, isHexagonalRepo, isTestPath } from './analysis/layers.js';
 import { buildReviewPlan } from './analysis/reviewPlan.js';
 import { isBreakingSignature, isSemanticChange } from './analysis/risk.js';
 import { assignLayers, scoreAll } from './analysis/scoring.js';
+import { assignUniqueIds, sourceRootFor } from './analysis/symbolIds.js';
 import { TestLocator, testFindings } from './analysis/testMapping.js';
 import { changedLineSets, emptyRisk, errorMessage, mapLimit, progressCounter } from './analysis/util.js';
 
@@ -37,6 +39,8 @@ const READ_CONCURRENCY = 16;
 /** Diff dışı dosyalar: kaynak (git cat-file vb.) G/Ç'si baskın olduğundan daha yüksek eşzamanlılık. */
 const INDEX_READ_CONCURRENCY = 32;
 const DEFAULT_MAX_INDEX_FILES = 5000;
+/** Bu sayıdan çok değişen Java dosyasında değişmeyen üyeler yalnız iskelet bilgisiyle tutulur (model boyutu). */
+export const SLIM_MEMBERS_FILE_LIMIT = 400;
 
 function skeleton(csf: ChangeSetFile, moduleOf: (p: string) => string | undefined): FileChange {
   const file: FileChange = {
@@ -94,62 +98,110 @@ function parseErrorText(model: JavaFileModel): string {
   return `Ayrıştırma hatası (satır ${lines}${model.errorLines.length > 5 ? ' ...' : ''})`;
 }
 
-async function parseSide(af: AnalyzedFile, side: 'old' | 'new', path: string, source: string, warnings: string[]): Promise<JavaFileModel | undefined> {
-  try {
-    const model = await parseJavaFile(path, source);
-    if (model.hasErrors && model.errorLines.length > 0) {
-      const text = `${side === 'old' ? 'Eski sürüm: ' : ''}${parseErrorText(model)}`;
-      af.file.parseError = af.file.parseError ? `${af.file.parseError}; ${text}` : text;
-      warnings.push(`${af.file.path}: ${text}; analiz kısmi olabilir`);
-    }
-    return model;
-  } catch (error) {
-    const text = `${side === 'old' ? 'Eski sürüm ayrıştırılamadı' : 'Ayrıştırılamadı'}: ${errorMessage(error)}`;
+/** Ayrıştırma sonucu: model ya da (yalnız bu dosyaya ait) hata. */
+type Parsed = JavaFileModel | Error;
+
+/** Ayrıştırma sonucunu dosyaya işler: hata/kısmi ayrıştırma uyarısı; model ya da undefined döner. */
+function acceptParsed(af: AnalyzedFile, side: 'old' | 'new', result: Parsed | undefined, warnings: string[]): JavaFileModel | undefined {
+  if (result === undefined) return undefined;
+  if (result instanceof Error) {
+    const text = `${side === 'old' ? 'Eski sürüm ayrıştırılamadı' : 'Ayrıştırılamadı'}: ${errorMessage(result)}`;
     af.file.parseError = af.file.parseError ? `${af.file.parseError}; ${text}` : text;
     warnings.push(`${af.file.path}: ${text}`);
     return undefined;
+  }
+  if (result.hasErrors && result.errorLines.length > 0) {
+    const text = `${side === 'old' ? 'Eski sürüm: ' : ''}${parseErrorText(result)}`;
+    af.file.parseError = af.file.parseError ? `${af.file.parseError}; ${text}` : text;
+    warnings.push(`${af.file.path}: ${text}; analiz kısmi olabilir`);
+  }
+  return result;
+}
+
+async function safeBlobId(cs: ChangeSet, side: 'old' | 'new', path: string): Promise<string | undefined> {
+  if (!cs.blobId) return undefined;
+  try {
+    return await cs.blobId(side, path);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Dosyaları işçi havuzu + blob SHA önbelleğiyle ayrıştırır (A1 parseJavaFiles). Havuz tek dosyanın hatasında tüm çağrıyı
+ * düşürdüğünden, hata olursa dosya dosya yeniden denenir; böylece yalnız sorunlu dosya Error olarak döner.
+ */
+async function parseAll(items: ParseItem[], onProgress?: (done: number, total: number) => void): Promise<Parsed[]> {
+  if (items.length === 0) return [];
+  try {
+    return await parseJavaFiles(items, { onProgress });
+  } catch {
+    const out: Parsed[] = [];
+    for (let i = 0; i < items.length; i++) {
+      try {
+        out.push((await parseJavaFiles([items[i]]))[0]);
+      } catch (error) {
+        out.push(error instanceof Error ? error : new Error(String(error)));
+      }
+      onProgress?.(i + 1, items.length);
+    }
+    return out;
   }
 }
 
 interface JavaSources {
   oldSrc?: string;
   newSrc?: string;
+  oldKey?: string;
+  newKey?: string;
 }
 
-/** Değişen Java dosyasının iki tarafını okur (G/Ç; eşzamanlı çalıştırılır). */
+/** Değişen Java dosyasının iki tarafını (ve varsa blob kimliklerini) okur (G/Ç; eşzamanlı çalıştırılır). */
 async function readJavaSources(cs: ChangeSet, af: AnalyzedFile): Promise<JavaSources> {
-  const csf = af.cs;
-  const oldPath = csf.oldPath ?? csf.path;
-  const [oldSrc, newSrc] = await Promise.all([
-    csf.status !== 'added' ? safeRead(cs, 'old', oldPath) : undefined,
-    csf.status !== 'deleted' ? safeRead(cs, 'new', csf.path) : undefined,
-  ]);
-  return { oldSrc, newSrc };
-}
-
-/** Okunmuş kaynakları ayrıştırır ve semantik diff'i çıkarır (CPU; sırayla çalıştırılır). */
-async function analyzeJavaFile(af: AnalyzedFile, src: JavaSources, warnings: string[]): Promise<void> {
   const csf = af.cs;
   const oldPath = csf.oldPath ?? csf.path;
   const needOld = csf.status !== 'added';
   const needNew = csf.status !== 'deleted';
-  const { oldSrc, newSrc } = src;
-  if ((needOld && oldSrc === undefined) || (needNew && newSrc === undefined)) {
+  const [oldSrc, newSrc, oldKey, newKey] = await Promise.all([
+    needOld ? safeRead(cs, 'old', oldPath) : undefined,
+    needNew ? safeRead(cs, 'new', csf.path) : undefined,
+    needOld ? safeBlobId(cs, 'old', oldPath) : undefined,
+    needNew ? safeBlobId(cs, 'new', csf.path) : undefined,
+  ]);
+  return { oldSrc, newSrc, oldKey, newKey };
+}
+
+/** İçeriği alınamayan dosya: yalnız diff gösterilir. true dönerse dosya analiz edilemez. */
+function missingSources(af: AnalyzedFile, src: JavaSources, warnings: string[]): boolean {
+  const csf = af.cs;
+  const needOld = csf.status !== 'added';
+  const needNew = csf.status !== 'deleted';
+  if ((needOld && src.oldSrc === undefined) || (needNew && src.newSrc === undefined)) {
     af.unanalyzed = true;
     const methods = methodsFromHunkHeaders(csf);
     warnings.push(
       `${csf.path}: dosya içeriği alınamadı; Java analizi yapılamadı, yalnızca diff gösteriliyor${methods.length ? ` (hunk başlıklarındaki metotlar: ${methods.join(', ')})` : ''}`,
     );
-    return;
+    return true;
   }
-  if (oldSrc !== undefined) af.oldModel = await parseSide(af, 'old', oldPath, oldSrc, warnings);
-  if (newSrc !== undefined) af.newModel = await parseSide(af, 'new', csf.path, newSrc, warnings);
+  return false;
+}
+
+/** Ayrıştırılmış iki tarafı işler ve semantik diff'i çıkarır. */
+function analyzeJavaFile(af: AnalyzedFile, oldParsed: Parsed | undefined, newParsed: Parsed | undefined, warnings: string[]): void {
+  const csf = af.cs;
+  const oldPath = csf.oldPath ?? csf.path;
+  const needOld = csf.status !== 'added';
+  const needNew = csf.status !== 'deleted';
+  af.oldModel = acceptParsed(af, 'old', oldParsed, warnings);
+  af.newModel = acceptParsed(af, 'new', newParsed, warnings);
   if ((needOld && !af.oldModel) || (needNew && !af.newModel)) {
     af.unanalyzed = true;
     return;
   }
   try {
-    af.typeDiffs = diffJavaFile(af.oldModel, af.newModel, { oldPath, newPath: csf.path });
+    // B7: git'in yeniden adlandırma dediği dosyada tek üst düzey tip eşiğe bakılmadan 'renamed' eşlenir (A1 seçeneği).
+    af.typeDiffs = diffJavaFile(af.oldModel, af.newModel, { oldPath, newPath: csf.path, fileRenamed: csf.status === 'renamed' });
     for (const td of af.typeDiffs) td.change.file = csf.path;
   } catch (error) {
     af.unanalyzed = true;
@@ -159,9 +211,25 @@ async function analyzeJavaFile(af: AnalyzedFile, src: JavaSources, warnings: str
   }
 }
 
+/** Liste: ilk 10 dosya adı (yol), fazlası '... ve N dosya daha'. */
+function fileList(paths: readonly string[], max = 10): string {
+  const sorted = [...paths].sort();
+  return `${sorted.slice(0, max).join(', ')}${sorted.length > max ? ` ... ve ${sorted.length - max} dosya daha` : ''}`;
+}
+
+/** İndekste okunamayan/ayrıştırılamayan ve ayrıştırma hatası (ERROR düğümü) içeren dosyalar için tek uyarı. */
+export function pushIndexProblems(warnings: string[], failed: readonly string[], withErrors: readonly string[]): void {
+  const total = failed.length + withErrors.length;
+  if (total === 0) return;
+  const parts: string[] = [];
+  if (failed.length) parts.push(`okunamayan/ayrıştırılamayan ${failed.length} dosya: ${fileList(failed)}`);
+  if (withErrors.length) parts.push(`ayrıştırma hatası içeren ${withErrors.length} dosya: ${fileList(withErrors)}`);
+  warnings.push(`Repo indeksinde ${total} dosya okunamadı/ayrıştırılamadı (${parts.join('; ')}); bu dosyalardaki çağıranlar görünmeyebilir veya eksik olabilir`);
+}
+
 /**
  * Repo indeksi. Değişen dosyaların head modeli (adım 2'de ayrıştırılmış) yeniden okunmaz/ayrıştırılmaz; yalnızca
- * diff dışındaki .java dosyaları okunur. Okuma eşzamanlı, ayrıştırma okuma tamamlandıkça yapılır.
+ * diff dışındaki .java dosyaları okunur. Okuma eşzamanlı; ayrıştırma işçi havuzunda, blob kimliği varsa önbellekten.
  */
 async function buildIndex(
   cs: ChangeSet,
@@ -187,28 +255,32 @@ async function buildIndex(
   const toRead = others.slice(0, budget);
   const total = changedModels.size + toRead.length;
   const counter = progressCounter(progress, total, (d, t) => `Repo indeksi: ${d}/${t} dosya`, changedModels.size);
-  let failed = 0;
-  const t0 = performance.now();
-  const parsed = await mapLimit(toRead, INDEX_READ_CONCURRENCY, async (p) => {
-    try {
-      const src = await safeRead(cs, 'new', p);
-      if (src === undefined) {
-        failed++;
-        return undefined;
-      }
-      try {
-        return await parseJavaFile(p, src);
-      } catch {
-        failed++;
-        return undefined;
-      }
-    } finally {
-      counter.tick();
-    }
+  const failed: string[] = [];
+  const tRead = performance.now();
+  // 1) Okuma (G/Ç, yüksek eşzamanlılık) + blob kimliği (önbellek anahtarı)
+  const read = await mapLimit(toRead, INDEX_READ_CONCURRENCY, async (p) => {
+    const [src, key] = await Promise.all([safeRead(cs, 'new', p), safeBlobId(cs, 'new', p)]);
+    if (src === undefined) failed.push(p);
+    return src === undefined ? undefined : { path: p, source: src, cacheKey: key };
   });
+  timings.indexRead = performance.now() - tRead;
+  // 2) Ayrıştırma (işçi havuzu + önbellek)
+  const items: ParseItem[] = [];
+  for (const x of read) if (x) items.push(x.cacheKey ? { path: x.path, source: x.source, cacheKey: x.cacheKey } : { path: x.path, source: x.source });
+  const t0 = performance.now();
+  let reported = 0;
+  const results = await parseAll(items, (done) => {
+    for (; reported < done; reported++) counter.tick();
+  });
+  for (; reported < toRead.length; reported++) counter.tick();
   timings.indexParse = performance.now() - t0;
-  if (failed > 0) warnings.push(`Repo indeksinde ${failed} dosya okunamadı/ayrıştırılamadı; bu dosyalardaki çağıranlar görünmeyebilir`);
-  const models = [...changedModels.values(), ...parsed.filter((m): m is JavaFileModel => m !== undefined)];
+  const parsed: JavaFileModel[] = [];
+  results.forEach((r, i) => {
+    if (r instanceof Error) failed.push(items[i].path);
+    else parsed.push(r);
+  });
+  const models = [...changedModels.values(), ...parsed];
+  pushIndexProblems(warnings, failed, parsed.filter((m) => m.hasErrors).map((m) => m.path));
   progress(`Çağrı grafiği kuruluyor (${models.length} dosya)`);
   const t1 = performance.now();
   try {
@@ -243,7 +315,7 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   });
   const byPath = new Map(files.map((af) => [af.file.path, af]));
 
-  // 2. Değişen Java dosyalarını oku (eşzamanlı) + ayrıştır ve semantik diff (sırayla; CPU)
+  // 2. Değişen Java dosyalarını oku (eşzamanlı) + ayrıştır (işçi havuzu, blob SHA önbelleği) + semantik diff
   const javaFiles = files.filter((af) => af.file.language === 'java' && !af.file.binary);
   const tRead = performance.now();
   const readCounter = progressCounter(progress, javaFiles.length, (d, t) => `Değişen dosyalar okunuyor (${d}/${t})`);
@@ -257,17 +329,37 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   timings.readChanged = performance.now() - tRead;
   const tParse = performance.now();
   const parseCounter = progressCounter(progress, javaFiles.length, (d, t) => `Java ayrıştırılıyor (${d}/${t} dosya)`);
+  // Eski + yeni taraflar tek havuz çağrısında ayrıştırılır; slots[i] = [eski öğe indeksi, yeni öğe indeksi]
+  const items: ParseItem[] = [];
+  const slots: [number | undefined, number | undefined][] = javaFiles.map((af, i) => {
+    const src = sources[i];
+    if (missingSources(af, src, warnings)) return [undefined, undefined];
+    const oldPath = af.cs.oldPath ?? af.cs.path;
+    const push = (path: string, source: string | undefined, key: string | undefined) => {
+      if (source === undefined) return undefined;
+      items.push(key ? { path, source, cacheKey: key } : { path, source });
+      return items.length - 1;
+    };
+    return [push(oldPath, src.oldSrc, src.oldKey), push(af.cs.path, src.newSrc, src.newKey)];
+  });
+  let ticked = 0;
+  const parsedItems = await parseAll(items, (done, total) => {
+    const target = Math.floor((done / total) * javaFiles.length);
+    for (; ticked < target; ticked++) parseCounter.tick();
+  });
+  for (; ticked < javaFiles.length; ticked++) parseCounter.tick();
   for (let i = 0; i < javaFiles.length; i++) {
     const af = javaFiles[i];
+    if (af.unanalyzed) continue;
+    const [o, n] = slots[i];
     try {
-      await analyzeJavaFile(af, sources[i], warnings);
+      analyzeJavaFile(af, o === undefined ? undefined : parsedItems[o], n === undefined ? undefined : parsedItems[n], warnings);
     } catch (error) {
       af.unanalyzed = true;
       af.typeDiffs = [];
       af.file.parseError = `Analiz başarısız: ${errorMessage(error)}`;
       warnings.push(`${af.file.path}: analiz başarısız (${errorMessage(error)})`);
     }
-    parseCounter.tick();
   }
   timings.parseChanged = performance.now() - tParse;
   const allDiffs = javaFiles.flatMap((af) => af.typeDiffs);
@@ -276,14 +368,27 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   } catch (error) {
     warnings.push(`Dosyalar arası taşıma tespiti başarısız (${errorMessage(error)})`);
   }
+  // B3: aynı FQN farklı kaynak köklerindeki dosyalardan geliyorsa model id'leri '@kök' ile ayrılır.
+  let rootLookup: (path: string) => string | undefined = (path) => {
+    const model = byPath.get(path)?.newModel;
+    return model ? sourceRootFor(path, model.packageName) : undefined;
+  };
+  const ids = assignUniqueIds(allDiffs, (path) => rootLookup(path));
   for (const af of javaFiles) {
     const pkg = (af.newModel ?? af.oldModel)?.packageName;
     if (pkg) af.file.packageName = pkg;
     af.file.typeIds = [...new Set(af.typeDiffs.map((td) => td.change.id))];
   }
 
-  // 3. Repo indeksi
-  const { index } = await buildIndex(cs, javaFiles, maxIndexFiles, warnings, progress, timings);
+  // 3. Repo indeksi (değişen Java dosyası yoksa atlanır: çağıran/alt tip sorgusu gerekmez)
+  const { index } =
+    javaFiles.length > 0
+      ? await buildIndex(cs, javaFiles, maxIndexFiles, warnings, progress, timings)
+      : { index: createEmptyIndex([]) };
+  rootLookup = (path) => {
+    const model = index.files.get(path) ?? byPath.get(path)?.newModel;
+    return model ? sourceRootFor(path, model.packageName) : undefined;
+  };
 
   const ctx: AnalysisContext = {
     files,
@@ -296,9 +401,13 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
     members: new Map(),
     types: new Map(),
     staleCalls: new Map(),
+    unverifiedStaleCalls: new Map(),
     brokenOverrides: new Map(),
+    orphanedOverrides: new Map(),
     staleTypeRefs: new Map(),
     architecture: new Map(),
+    importRetargets: new Map(),
+    ids,
     warnings,
   };
 
@@ -312,6 +421,11 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   progress('Risk ve mimari analiz');
   const tRisk = performance.now();
   for (const af of files) {
+    try {
+      if (af.file.language === 'java' && !af.unanalyzed && af.oldModel && af.newModel) applyImportRetargets(ctx, af, importRetargets(af.oldModel, af.newModel));
+    } catch (error) {
+      warnings.push(`${af.file.path}: import hedefi karşılaştırılamadı (${errorMessage(error)})`);
+    }
     try {
       if (af.file.language === 'java' && !af.unanalyzed) {
         af.file.cosmeticOnly = af.cs.status !== 'added' && af.cs.status !== 'deleted' && isCosmeticJava(af.cs.status, af.oldModel, af.newModel, af.typeDiffs);
@@ -328,14 +442,18 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   for (const af of files) {
     if (af.file.isTest || !af.newModel) continue;
     try {
-      findings.push(
-        ...checkArchitecture(af.file.path, af.newModel, af.oldModel, af.cs.oldPath, {
-          hexagonal,
-          resolve: (name, file, type) => index.resolveTypeName(name, file, type),
-          getType: (fqn) => index.getType(fqn),
-          pathOfType: (fqn) => index.getFileOfType(fqn)?.path,
-        }),
-      );
+      const arch = checkArchitecture(af.file.path, af.newModel, af.oldModel, af.cs.oldPath, {
+        hexagonal,
+        resolve: (name, file, type) => index.resolveTypeName(name, file, type),
+        getType: (fqn) => index.getType(fqn),
+        pathOfType: (fqn) => index.getFileOfType(fqn)?.path,
+      });
+      for (const f of arch) {
+        // Yalnız biçim değişikliği olan dosyada "önceden de vardı" bilgileri gürültüdür.
+        if (af.file.cosmeticOnly && f.severity === 'info') continue;
+        if (f.symbolIds) f.symbolIds = f.symbolIds.map((id) => ids.toModel(id, af.file.path));
+        findings.push(f);
+      }
     } catch (error) {
       warnings.push(`${af.file.path}: mimari kontroller çalıştırılamadı (${errorMessage(error)})`);
     }
@@ -358,7 +476,7 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
 
   // 6. Test eşleme
   progress('Testler eşleniyor');
-  const locator = new TestLocator(repoFiles, (fqn) => index.filesReferencingType(fqn));
+  const locator = new TestLocator(repoFiles, (fqn) => index.filesReferencingType(ids.toIndex(fqn)));
   const primaryTests = new Map<string, string[]>();
   for (const af of files) {
     if (af.file.isTest || af.file.language !== 'java' || af.cs.status === 'deleted') continue;
@@ -389,6 +507,7 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
     files: fileChanges,
     index,
     staleCalls: ctx.staleCalls,
+    toIndexId: ids.toIndex,
     layerOf: (path, fqn) => {
       const t = fqn ? index.getType(fqn) : undefined;
       const f = fqn ? index.getFileOfType(fqn) : undefined;
@@ -422,7 +541,7 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
             owner: td.change,
             file: af.file,
             staleCalls: ctx.staleCalls.get(mc.id) ?? [],
-            outsideCallers: outsideCallerIds(ctx, mc.callers).length,
+            outsideCallers: outsideCallerIds(ctx, mc.callers, 'exact').length,
             followsChangedContract: mc.overrides.some((o) => contractChanged.has(o)),
           }),
         );
@@ -440,6 +559,9 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
       cosmeticMembers: semanticMembers.filter((m) => m.change.status === 'cosmetic').length,
     }),
   );
+
+  findings.push(...unverifiedStaleFinding(ctx.unverifiedStaleCalls));
+  if (javaFiles.length > SLIM_MEMBERS_FILE_LIMIT) slimUnchangedMembers(types);
 
   const summary = computeSummary(fileChanges, types, graphResult.impactedOutsideDiff, tests.untested);
   timings.planGraphFindings = performance.now() - tPlan;
@@ -459,6 +581,59 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
     findings: sortFindings(findings),
     warnings,
   };
+}
+
+/**
+ * B5: aynı basit adın import hedefi değiştiyse (javax → jakarta) adı kullanan tiplere ayrıntı eklenir; değişmemiş/kozmetik
+ * görünen tip 'modified' sayılır (anlam değişti) ve risk için ctx.importRetargets doldurulur.
+ */
+function applyImportRetargets(ctx: AnalysisContext, af: AnalyzedFile, retargets: readonly ImportRetarget[]): void {
+  if (retargets.length === 0) return;
+  const top = af.typeDiffs.filter((td) => td.newType && !td.newType.outerFqn);
+  const uses = (td: TypeDiff, r: ImportRetarget) => r.name === '*' || new RegExp(`\\b${r.name.replace(/\$/g, '\\$')}\\b`).test(td.newType?.normalizedText ?? '');
+  for (const td of af.typeDiffs) {
+    if (!td.newType) continue;
+    const mine = retargets.filter((r) => uses(td, r));
+    if (mine.length === 0) continue;
+    // İç tiplerde ayrıca işaretlenmez; dış tip (ya da kullanan üst düzey tip) yeterli.
+    if (td.newType.outerFqn && top.some((t) => mine.every((r) => uses(t, r)))) continue;
+    for (const r of mine) {
+      const d = describeRetarget(r);
+      if (!td.change.details.includes(d)) td.change.details.push(d);
+    }
+    if (td.change.status === 'unchanged' || td.change.status === 'cosmetic') td.change.status = 'modified';
+    ctx.importRetargets.set(td.change.id, mine);
+  }
+  // Hiçbir tipte basit ad bulunamadıysa (ör. yalnız javadoc'ta) ana tip üzerinden raporlanır.
+  if (!retargets.some((r) => af.typeDiffs.some((td) => ctx.importRetargets.get(td.change.id)?.includes(r))) && top[0]) {
+    const td = top[0];
+    for (const r of retargets) {
+      const d = describeRetarget(r);
+      if (!td.change.details.includes(d)) td.change.details.push(d);
+    }
+    if (td.change.status === 'unchanged' || td.change.status === 'cosmetic') td.change.status = 'modified';
+    ctx.importRetargets.set(td.change.id, [...retargets]);
+  }
+}
+
+/**
+ * Büyük diff'te değişmeyen üyeler iskelet olarak kalır ("değişmeyenleri göster" görünümü için ad/imza/aralık yeter):
+ * details/flags/callers/callees/overrides/overriddenBy boşaltılır.
+ */
+function slimUnchangedMembers(types: readonly TypeChange[]): void {
+  for (const t of types) {
+    for (const m of t.members) {
+      if (m.status !== 'unchanged') continue;
+      m.details = [];
+      m.flags = [];
+      m.callers = [];
+      m.callees = [];
+      m.overrides = [];
+      m.overriddenBy = [];
+      delete m.oldSignature;
+      delete m.oldRange;
+    }
+  }
 }
 
 /** Aynı id'li tip iki kez gelirse (ör. tespit edilmemiş taşıma) head tarafı tutulur. */

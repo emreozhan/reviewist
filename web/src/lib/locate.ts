@@ -1,4 +1,6 @@
 import type { ReviewIndex } from './reviewIndex';
+import { topLevelFqn } from './reviewIndex';
+import { memberName, parseSymbolId, simpleTypeName } from './symbolId';
 
 /** Diff dışındaki bir sembolün konumu: dosya, satır ve hangi taraftan okunacağı. */
 export interface SymbolLocation {
@@ -10,12 +12,9 @@ export interface SymbolLocation {
   guessed: boolean;
 }
 
-/** 'com.acme.Outer.Inner#m()' → 'com.acme.Outer' (büyük harfle başlayan ilk parça üst düzey tiptir). */
+/** 'com.acme.Outer.Inner#m()' → 'com.acme.Outer' (büyük harfle başlayan ilk parça üst düzey tiptir; '@kök' soneki atılır). */
 export function topLevelTypeId(symbolId: string): string {
-  const typePart = symbolId.split('#')[0] ?? symbolId;
-  const parts = typePart.split('.');
-  const i = parts.findIndex((p) => /^[A-Z]/.test(p));
-  return i < 0 ? typePart : parts.slice(0, i + 1).join('.');
+  return topLevelFqn(symbolId);
 }
 
 function commonPrefixLength(a: string, b: string): number {
@@ -25,21 +24,21 @@ function commonPrefixLength(a: string, b: string): number {
 }
 
 /**
- * Diff'teki tiplerin dosya yollarından kaynak kökünü (ör. 'src/main/java/') çıkarıp
- * sembolün dosya yolunu tahmin eder. En uzun ortak paket önekine sahip tipin kökü seçilir.
+ * Sembolün dosya yolunu tahmin eder. Kimlikte kaynak kökü varsa ('Foo@android/guava/src') doğrudan kullanılır;
+ * yoksa diff'teki tiplerden çıkarılmış kaynak köklerinden en uzun ortak paket önekine sahip olanı seçilir.
  */
 export function guessFilePath(index: ReviewIndex, symbolId: string): string | undefined {
-  const top = topLevelTypeId(symbolId);
+  const top = topLevelFqn(symbolId);
   if (!/^[\w.$]+$/.test(top)) return undefined;
+  const rel = `${top.replace(/\./g, '/')}.java`;
+  const { root } = parseSymbolId(symbolId);
+  if (root) return `${root}/${rel}`;
   let best: { root: string; score: number } | undefined;
-  for (const t of index.typeById.values()) {
-    const suffix = `${topLevelTypeId(t.id).replace(/\./g, '/')}.java`;
-    if (!t.file.endsWith(suffix)) continue;
-    const root = t.file.slice(0, t.file.length - suffix.length);
-    const score = commonPrefixLength(t.id, top);
-    if (!best || score > best.score) best = { root, score };
+  for (const r of index.sourceRoots) {
+    const score = commonPrefixLength(r.pkg, top);
+    if (!best || score > best.score) best = { root: r.root, score };
   }
-  return best ? `${best.root}${top.replace(/\./g, '/')}.java` : undefined;
+  return best ? `${best.root}${rel}` : undefined;
 }
 
 /** Sembolün konumu: diff içindeyse üye/tip aralığı; değilse graf düğümünün `range`'i; yoksa üst tip düğümü ya da tahmin. */
@@ -60,7 +59,7 @@ export function locateSymbol(index: ReviewIndex, id: string): SymbolLocation {
     const file = fc ? (fc.oldPath ?? fc.path) : node.file;
     return { file, line: node.range?.startLine, side, inDiff: false, guessed: false };
   }
-  const ownerId = id.split('#')[0] ?? id;
+  const ownerId = parseSymbolId(id).typeId;
   const owner = ownerId !== id ? index.nodeById.get(ownerId) : undefined;
   if (owner?.file) return { file: owner.file, side: 'new', inDiff: false, guessed: false };
   const guess = guessFilePath(index, id);
@@ -76,22 +75,22 @@ function escapeRe(s: string): string {
  * Tip için 'class|interface|enum|record Ad', üye için çağrı değil bildirim gibi görünen 'ad(' satırı.
  */
 export function findDeclarationLine(lines: readonly string[], symbolId: string): number | undefined {
-  const hash = symbolId.indexOf('#');
-  if (hash < 0) {
-    const name = escapeRe(symbolId.slice(symbolId.lastIndexOf('.') + 1));
+  const { fqn, member } = parseSymbolId(symbolId);
+  if (member === undefined) {
+    const name = escapeRe(simpleTypeName(fqn));
     const re = new RegExp(`\\b(class|interface|enum|record|@interface)\\s+${name}\\b`);
     const i = lines.findIndex((l) => re.test(l));
     return i >= 0 ? i + 1 : undefined;
   }
-  const member = symbolId.slice(hash + 1);
-  const paren = member.indexOf('(');
-  const name = escapeRe(paren >= 0 ? member.slice(0, paren) : member);
+  const isCall = member.includes('(');
+  const name = escapeRe(memberName(member));
   // Bildirim: adın önünde bir tip/niteleyici (kelime, >, ]) olur; '.' ya da '=' sonrası çağrıdır.
-  const decl = paren >= 0 ? new RegExp(`[\\w>\\]]\\s+${name}\\s*\\(`) : new RegExp(`[\\w>\\]]\\s+${name}\\s*(=|;)`);
+  const decl = isCall ? new RegExp(`[\\w>\\]]\\s+${name}\\s*\\(`) : new RegExp(`[\\w>\\]]\\s+${name}\\s*(=|;)`);
+  const call = new RegExp(`([.=]|\\bnew)\\s*${name}\\s*\\(`);
   const i = lines.findIndex((l) => {
     const s = l.trim();
     if (s.startsWith('//') || s.startsWith('*') || s.startsWith('return ')) return false;
-    return decl.test(s) && !new RegExp(`([.=]|\\bnew)\\s*${name}\\s*\\(`).test(s);
+    return decl.test(s) && !call.test(s);
   });
   return i >= 0 ? i + 1 : undefined;
 }

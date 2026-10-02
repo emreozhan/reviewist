@@ -24,7 +24,8 @@ export function useShortcuts(tab: Tab): void {
       const ui = useUi.getState();
       if (ui.helpOpen) return;
       const progress = useProgress.getState();
-      const order = navigationOrder(planView(review, index, ui.filters));
+      // Katlı özet bölümleri (kozmetik, düşük riskli Java dışı) açılmadıkça j/k/n ile atlanır.
+      const order = navigationOrder(planView(review, index, ui.filters), ui.openFolds);
       const current = ui.selectedFileId;
       const go = (id: string | undefined) => {
         if (!id) return;

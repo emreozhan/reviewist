@@ -1,5 +1,5 @@
 import type { AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
-import type { FileContentResponse, FileSide, ReviewApi } from './apiTypes';
+import type { FileContentResponse, FileSide, LoadOptions, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 
 /** Mock veri yalnız mock modunda yüklensin diye dinamik içe aktarılır (ayrı chunk). */
@@ -9,6 +9,29 @@ async function sample() {
     import('../mock/sampleFiles'),
   ]);
   return { sampleReview, SAMPLE_REVIEW_ID, sampleFiles };
+}
+
+/** Performans ve görsel kontrol için sentetik büyük review (2000 dosya, 20k üye); ilk istekte üretilir. */
+const LARGE_ID = 'sentetik-buyuk';
+let largeCache: ReviewModel | null = null;
+async function large(): Promise<ReviewModel> {
+  if (!largeCache) {
+    const { makeLargeReview } = await import('../mock/largeReview');
+    largeCache = makeLargeReview({ id: LARGE_ID });
+  }
+  return largeCache;
+}
+
+/** Gerçek API'deki gibi indirme ilerlemesi taklidi (~38 MB, sıkıştırılmış: toplam bilinmez). */
+async function simulateDownload(onProgress: ProgressFn | undefined, signal?: AbortSignal): Promise<void> {
+  if (!onProgress) return;
+  const total = 38 * 1024 * 1024;
+  for (let i = 1; i <= 8; i++) {
+    await delay(90, signal);
+    onProgress({ phase: 'download', loaded: Math.round((total * i) / 8) });
+  }
+  onProgress({ phase: 'parse', loaded: total });
+  await delay(120, signal);
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -80,8 +103,9 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
       ],
     };
   },
-  async createReview(req: ReviewRequest, signal?: AbortSignal): Promise<ReviewModel> {
+  async createReview(req: ReviewRequest, signal?: AbortSignal, onProgress?: ProgressFn): Promise<ReviewModel> {
     await delay(2600, signal);
+    await simulateDownload(onProgress, signal);
     return mockApi.createReviewNow(req);
   },
   async createReviewNow(req: ReviewRequest): Promise<ReviewModel> {
@@ -124,13 +148,19 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
   async listReviews(): Promise<ReviewListItem[]> {
     await delay(60);
     const { sampleReview } = await sample();
-    return [sampleReview].filter((r) => !deleted.has(r.id)).map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length }));
+    const items: ReviewListItem[] = [sampleReview].filter((r) => !deleted.has(r.id)).map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length }));
+    if (!deleted.has(LARGE_ID)) items.push({ id: LARGE_ID, title: 'v31.0...v33.0 (sentetik büyük review)', createdAt: '2026-10-03T00:00:00.000Z', kind: 'git', files: 2000 });
+    return items;
   },
-  async getReview(id: string): Promise<ReviewModel> {
-    await delay(120);
+  async getReview(id: string, opts?: LoadOptions): Promise<ReviewModel> {
+    await delay(120, opts?.signal);
+    if (id === LARGE_ID && !deleted.has(LARGE_ID)) {
+      await simulateDownload(opts?.onProgress, opts?.signal);
+      return large();
+    }
     const { sampleReview, SAMPLE_REVIEW_ID } = await sample();
-    if (id === SAMPLE_REVIEW_ID) return created.find((r) => r.id === id) ?? sampleReview;
-    throw new ApiRequestError(`Review bulunamadı: ${id}`, { kind: 'http', status: 404, endpoint: `mock:/api/reviews/${id}` });
+    if (id === SAMPLE_REVIEW_ID && !deleted.has(id)) return created.find((r) => r.id === id) ?? sampleReview;
+    throw new ApiRequestError(`Review bulunamadı: ${id}`, { kind: 'http', status: 404, endpoint: `mock:/api/reviews/${id}`, fromServerBody: true });
   },
   async getFile(_id: string, path: string, side: FileSide): Promise<FileContentResponse> {
     await delay(90);

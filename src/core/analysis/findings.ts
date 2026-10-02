@@ -19,6 +19,7 @@ interface Rule {
 const MEMBER_RULES: Record<string, Rule> = {
   'removed-with-callers': { category: 'callers', severity: 'error', title: (l) => `Silinmiş/değişmiş ama hâlâ çağrılıyor: ${l}`, inTests: true },
   'override-broken': { category: 'inheritance', severity: 'error', title: (l) => `Alt sınıflardaki override'lar koptu: ${l}`, inTests: true },
+  'override-orphaned': { category: 'inheritance', severity: 'info', title: (l) => `Alt sınıflardaki metotlar artık override etmiyor: ${l}`, inTests: true },
   'public-api-signature': { category: 'api', severity: 'warning', title: (l) => `Public API imzası değişti: ${l}` },
   'public-api-removed': { category: 'api', severity: 'warning', title: (l) => `Public üye silindi: ${l}` },
   'public-api-renamed': { category: 'api', severity: 'warning', title: (l) => `Public üye yeniden adlandırıldı: ${l}` },
@@ -49,12 +50,14 @@ const TYPE_RULES: Record<string, Rule> = {
   'type-renamed': { category: 'api', severity: 'warning', title: (l) => `Public tip yeniden adlandırıldı/taşındı: ${l}` },
   'supertypes-changed': { category: 'inheritance', severity: 'warning', title: (l) => `Kalıtım hiyerarşisi değişti: ${l}` },
   'visibility-narrowed': { category: 'api', severity: 'warning', title: (l) => `Tip görünürlüğü daraldı: ${l}` },
+  'import-retarget': { category: 'risk', severity: 'info', title: (l) => `Import hedefi değişti: ${l}` },
 };
 
 const FILE_RULES: Record<string, Rule> = {
   'sql-migration': { category: 'risk', severity: 'warning', title: (l) => `Veritabanı migration'ı: ${l}` },
   'build-dependency': { category: 'risk', severity: 'info', title: (l) => `Bağımlılık değişikliği: ${l}` },
   'config-change': { category: 'risk', severity: 'info', title: (l) => `Yapılandırma değişikliği: ${l}` },
+  'module-descriptor': { category: 'api', severity: 'warning', title: (l) => `Modül bildirimi değişti: ${l}` },
   unanalyzed: { category: 'other', severity: 'warning', title: (l) => `Sembol analizi yapılamadı: ${l}` },
 };
 
@@ -111,9 +114,16 @@ export function memberFindings(input: MemberFindingInput): Finding[] {
       message = `${r.message}. Repoda çağıranı kalmadı; harici kullanıcılar (başka modül/servis) varsa kırılır.`;
     }
     if (r.code === 'removed-with-callers') {
-      const sites = input.staleCalls.slice(0, 5).map((c) => `${c.file}:${c.line}${c.inChangedCode ? ' (bu diff içinde)' : ''}`);
-      message = `${r.message}. Çağrı yerleri: ${sites.join(', ')}${input.staleCalls.length > 5 ? ' ...' : ''}`;
-      symbolIds = [mc.id, ...new Set(input.staleCalls.map((c) => c.fromId))];
+      const calls = input.staleCalls.filter((c) => c.confidence !== 'name-only');
+      if (calls.length === 0) continue;
+      // Yalnız 'exact' çağrı yeri kesin kırılmadır (error); yalnız 'likely' ise uyarı.
+      if (!calls.some((c) => c.confidence === 'exact')) {
+        severity = 'warning';
+        title = `Silinmiş/değişmiş, hâlâ çağrılıyor olabilir: ${label}`;
+      }
+      const sites = calls.slice(0, 5).map((c) => `${c.file}:${c.line}${c.inChangedCode ? ' (bu diff içinde)' : ''}`);
+      message = `${r.message}. Çağrı yerleri: ${sites.join(', ')}${calls.length > 5 ? ' ...' : ''}`;
+      symbolIds = [mc.id, ...new Set(calls.map((c) => c.fromId))];
     }
     if ((r.code === 'public-api-signature' || r.code === 'public-api-removed' || r.code === 'public-api-renamed') && input.outsideCallers > 0) {
       message = `${r.message}. Diff dışında ${input.outsideCallers} çağıranı var.`;
@@ -157,6 +167,29 @@ export function typeFindings(tc: TypeChange, file: FileChange): Finding[] {
     });
   }
   return out;
+}
+
+/**
+ * Alıcı tipi çözülemediği için (yalnız ad eşleşmesi) doğrulanamayan olası bayat çağrılar: tek özet bilgi bulgusu.
+ * `counts`: üye id → olası çağrı sayısı.
+ */
+export function unverifiedStaleFinding(counts: ReadonlyMap<string, number>): Finding[] {
+  if (counts.size === 0) return [];
+  const total = [...counts.values()].reduce((s, n) => s + n, 0);
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return [
+    {
+      id: 'callers:unverified-stale',
+      severity: 'info',
+      category: 'callers',
+      title: `${total} olası çağrı ad eşleşmesiyle doğrulanamadı`,
+      message: `Silinen/değişen ${counts.size} üyenin adını taşıyan ${total} çağrı yerinin alıcı tipi çözülemedi; gerçekten eski üyeye gidip gitmedikleri bilinmiyor (risk puanına katılmadı): ${top
+        .slice(0, 5)
+        .map(([id, n]) => `${symbolLabel(id)} (${n})`)
+        .join(', ')}${top.length > 5 ? ' ...' : ''}.`,
+      symbolIds: top.slice(0, 20).map(([id]) => id),
+    },
+  ];
 }
 
 export function fileFindings(file: FileChange): Finding[] {

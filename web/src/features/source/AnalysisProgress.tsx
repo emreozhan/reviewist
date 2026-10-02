@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { AnalysisProgressState } from '../../lib/analysisRunner';
+import { LoadMeter } from '../workspace/LoadingState';
 
 interface AnalysisProgressProps {
   progress: AnalysisProgressState;
@@ -22,7 +23,7 @@ function useElapsed(): number {
 /** Sunucunun gönderdiği gerçek ilerleme mesajları; eski sunucuda (senkron uç) yalnız geçen süre. */
 export function AnalysisProgress({ progress, onCancel }: AnalysisProgressProps) {
   const elapsed = useElapsed();
-  const { messages, mode } = progress;
+  const { messages, mode, download } = progress;
   const hidden = Math.max(0, messages.length - MAX_VISIBLE);
   const visible = messages.slice(hidden);
 
@@ -50,6 +51,12 @@ export function AnalysisProgress({ progress, onCancel }: AnalysisProgressProps) 
           </li>
         )}
       </ol>
+      {download && (
+        <div className="analysis__download">
+          <p className="analysis__label">Analiz bitti; sonuç modeli yükleniyor</p>
+          <LoadMeter progress={download} />
+        </div>
+      )}
       <div className="analysis__foot">
         <span className="gauge">{elapsed.toFixed(1)} sn</span>
         <span className="muted">Büyük depolarda indeksleme birkaç dakika sürebilir.</span>

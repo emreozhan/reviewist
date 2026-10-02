@@ -17,6 +17,7 @@ export function DiffView({ file }: { file: FileChange }) {
   const selectedSymbolId = useUi((s) => s.selectedSymbolId);
   const selectSymbol = useUi((s) => s.selectSymbol);
   const focusLine = useUi((s) => s.focusLine);
+  const clearFocus = useUi((s) => s.clearFocus);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [expandAll, setExpandAll] = useState(false);
 
@@ -57,6 +58,7 @@ export function DiffView({ file }: { file: FileChange }) {
     onExpand: (id: string) => setExpanded((s) => new Set([...s, id])),
     focus,
     onFocusMissing,
+    onFocusDone: clearFocus,
     label: `${file.path} farkı`,
   };
 

@@ -17,17 +17,26 @@ export interface FakeRepoIndexInit {
   /** `${owner}#${name}/${argCount}` → çağrılar */
   callsTo?: Record<string, CallRef[]>;
   referencing?: Record<string, string[]>;
+  /** `${fromId}|${line}|${name}` → çağrı yerinin bağlandığı hedef id'ler (targetsOfCallSite). */
+  callSiteTargets?: Record<string, string[]>;
 }
 
 export class FakeRepoIndex implements RepoIndexApi {
   readonly files: ReadonlyMap<string, JavaFileModel>;
   private readonly types = new Map<string, { type: JavaType; file: JavaFileModel }>();
+  private readonly allTypes = new Map<string, { type: JavaType; file: JavaFileModel }[]>();
 
   constructor(private readonly init: FakeRepoIndexInit = {}) {
     const files = new Map<string, JavaFileModel>();
     for (const f of init.files ?? []) {
       files.set(f.path, f);
-      for (const t of f.types) this.types.set(t.fqn, { type: t, file: f });
+      for (const t of f.types) {
+        // Yinelenen FQN: ilk kazanır (gerçek RepoIndex gibi); hepsi typesByFqn'de.
+        if (!this.types.has(t.fqn)) this.types.set(t.fqn, { type: t, file: f });
+        const list = this.allTypes.get(t.fqn);
+        if (list) list.push({ type: t, file: f });
+        else this.allTypes.set(t.fqn, [{ type: t, file: f }]);
+      }
     }
     this.files = files;
   }
@@ -101,5 +110,13 @@ export class FakeRepoIndex implements RepoIndexApi {
 
   filesReferencingType(fqn: string): string[] {
     return [...(this.init.referencing?.[fqn] ?? [])];
+  }
+
+  targetsOfCallSite(fromId: string, line: number, name: string): string[] {
+    return [...(this.init.callSiteTargets?.[`${fromId}|${line}|${name}`] ?? [])];
+  }
+
+  typesByFqn(fqn: string): { type: JavaType; file: JavaFileModel }[] {
+    return [...(this.allTypes.get(fqn) ?? [])];
   }
 }

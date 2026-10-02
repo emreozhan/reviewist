@@ -1,15 +1,21 @@
 import { useEffect, useRef } from 'react';
 import { Icon } from '../../components/Icon';
 import type { NavFilters as Filters } from '../../lib/selectors';
+import type { NavMode } from '../../state/uiStore';
 import { useUi } from '../../state/uiStore';
 
-const TOGGLES: { key: keyof Omit<Filters, 'query'>; label: string; title: string }[] = [
-  { key: 'hideCosmetic', label: 'Kozmetikler sonda', title: 'Yalnız biçim/import değişen dosyaları en sona katla' },
-  { key: 'onlyHighRisk', label: 'Yalnız yüksek risk', title: 'Yüksek/kritik riskli dosya ve sembolleri göster' },
-  { key: 'hideTests', label: 'Testleri gizle', title: 'Test dosyalarını listeden çıkar' },
-];
+type ToggleKey = keyof Omit<Filters, 'query'>;
 
-export function NavFilters() {
+function toggles(mode: NavMode): { key: ToggleKey; label: string; title: string }[] {
+  const plan = mode === 'plan';
+  return [
+    { key: 'onlyHighRisk', label: plan ? 'Yalnız riskli adımlar' : 'Yalnız yüksek risk', title: 'Yalnız kendisi ya da içindeki bir tip/üye yüksek veya kritik riskli dosyalar' },
+    { key: 'hideTests', label: 'Testleri gizle', title: 'Test dosyalarını listeden çıkar' },
+    { key: 'hideCosmetic', label: 'Kozmetikler sonda', title: 'Yalnız biçim/import değişen dosyaları en sona katla' },
+  ];
+}
+
+export function NavFilters({ mode }: { mode: NavMode }) {
   const filters = useUi((s) => s.filters);
   const setFilters = useUi((s) => s.setFilters);
   const tick = useUi((s) => s.searchFocusTick);
@@ -41,7 +47,7 @@ export function NavFilters() {
         <kbd className="search__kbd" aria-hidden="true">/</kbd>
       </div>
       <div className="filter-chips" role="group" aria-label="Filtreler">
-        {TOGGLES.map((t) => (
+        {toggles(mode).map((t) => (
           <button
             key={t.key}
             type="button"

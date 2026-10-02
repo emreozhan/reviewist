@@ -35,8 +35,12 @@ export interface LayerInput {
 
 const BUILD_FILES = new Set(['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'gradle.properties']);
 const MODULE_FILES = new Set(['pom.xml', 'build.gradle', 'build.gradle.kts']);
-const TEST_DIR_RE = /(^|\/)src\/(test|it|integrationTest|integration-test|testFixtures|test-integration)\//;
-const TEST_NAME_RE = /(^Test[A-Z]\w*|\w+(Test|Tests|IT|ITCase|TestCase|Spec))\.(java|kt|groovy|scala)$/;
+/**
+ * Test kodu dizinleri: src/test*, src/it, src/integration-test, src/testFixtures; test kütüphaneleri (`*-testlib/`,
+ * `testlib/`) ve test modülleri (`*-tests/`, ör. guava-tests).
+ */
+const TEST_DIR_RE = /(^|\/)(src\/(test[\w-]*|it|integrationTest|integration-test)\/|[\w.-]*-testlib\/|testlib\/|[\w.-]+-tests\/)/;
+const TEST_NAME_RE = /(^Test[A-Z]\w*|\w+(Test|Tests|IT|ITCase|TestCase|Tester|Spec))\.(java|kt|groovy|scala)$/;
 const SPRING_DATA_REPOS = new Set([
   'JpaRepository',
   'CrudRepository',

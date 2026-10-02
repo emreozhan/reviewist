@@ -1,5 +1,6 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
+import { scrollParent } from '../../lib/scrollParent';
 import { centeredOffset, prefixOffsets, windowRange } from '../../lib/windowing';
 
 /** Bu sayının altındaki tablolar olduğu gibi çizilir (üye diff'i, küçük dosyalar). */
@@ -27,17 +28,6 @@ interface Focus {
   tick: number;
 }
 
-/** Dikey kaydıran en yakın üst öğe (yatay kaydırmalı `.code-surface` atlanır). */
-function scrollParent(el: HTMLElement): HTMLElement {
-  let cur = el.parentElement;
-  while (cur) {
-    const oy = getComputedStyle(cur).overflowY;
-    if ((oy === 'auto' || oy === 'scroll') && cur.scrollHeight > cur.clientHeight + 1) return cur;
-    cur = cur.parentElement;
-  }
-  return (document.scrollingElement as HTMLElement | null) ?? document.documentElement;
-}
-
 function flash(el: HTMLElement): void {
   el.classList.remove('is-flash');
   void el.offsetWidth;
@@ -47,9 +37,9 @@ function flash(el: HTMLElement): void {
 /**
  * Basit pencereleme: yalnız görünür satırlar (+ pay) çizilir, üst/alt boşluk aralayıcı satırlarla korunur.
  * Satır yükseklikleri çizildikçe ölçülür; ölçülmeyenler aynı türün ilk ölçümüyle tahmin edilir.
- * `focus` verilirse o öğe ortalanıp vurgulanır (çizili değilse önce tahmini konuma atlanır).
+ * `focus` verilirse o öğe ortalanıp vurgulanır (çizili değilse önce tahmini konuma atlanır); bitince `onFocusDone` çağrılır.
  */
-export function useRowWindow(items: readonly WindowItem[], focus: Focus | null): RowWindow {
+export function useRowWindow(items: readonly WindowItem[], focus: Focus | null, onFocusDone?: (tick: number) => void): RowWindow {
   const bodyRef = useRef<HTMLTableSectionElement>(null);
   const heights = useRef(new Map<string, number>());
   const kindHeight = useRef(new Map<string, number>());
@@ -133,13 +123,14 @@ export function useRowWindow(items: readonly WindowItem[], focus: Focus | null):
       handledTick.current = focus.tick;
       el.scrollIntoView({ block: 'center', inline: 'nearest' });
       flash(el);
+      onFocusDone?.(focus.tick);
       return;
     }
     const scroller = scrollParent(body);
     const bodyTop = body.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
     scroller.scrollTop = bodyTop + centeredOffset(offsets, focus.index, scroller.clientHeight);
     syncView();
-  }, [focus, offsets, range.start, range.end, syncView]);
+  }, [focus, offsets, range.start, range.end, syncView, onFocusDone]);
 
   const total = offsets[offsets.length - 1] ?? 0;
   return {

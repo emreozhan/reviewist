@@ -1,19 +1,22 @@
-import { useState } from 'react';
-import type { Finding } from '../../../../src/shared/types';
-import { Segmented } from '../../components/Segmented';
-import { CATEGORY_LABEL, groupFindings } from '../../lib/selectors';
+import { useMemo } from 'react';
+import { VirtualList } from '../../components/VirtualList';
+import type { FindingRow } from '../../lib/selectors';
+import { CATEGORY_LABEL, filterFindings, findingRows, groupFindings } from '../../lib/selectors';
+import { useUi } from '../../state/uiStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { FindingCard } from './FindingCard';
+import { FindingFilterBar } from './FindingFilterBar';
 
-type Level = 'all' | 'warning' | 'error';
+const rowKey = (r: FindingRow) => r.key;
+const estimate = (r: FindingRow) => (r.kind === 'cat' ? 44 : 112);
 
-/** Bulgular: kategoriye göre gruplu, en ağır önemden başlayarak; tıklanınca ilgili dosya/satıra gider. */
+/** Bulgular: önem + kategori filtreli, kategoriye göre gruplu; binlerce bulguda pencereli çizilir. */
 export function FindingsPage() {
-  const { review } = useReviewCtx();
-  const [level, setLevel] = useState<Level>('all');
-  const counts = { error: 0, warning: 0, info: 0 } satisfies Record<Finding['severity'], number>;
-  for (const f of review.findings) counts[f.severity]++;
-  const groups = groupFindings(review.findings, level === 'all' ? undefined : level);
+  const { review, index } = useReviewCtx();
+  const filter = useUi((s) => s.findingFilter);
+  const counts = index.findingCounts.total;
+  const rows = useMemo(() => findingRows(groupFindings(filterFindings(review.findings, filter))), [review.findings, filter]);
+  const shown = rows.reduce((n, r) => n + (r.kind === 'finding' ? 1 : 0), 0);
 
   return (
     <div className="findings">
@@ -23,37 +26,33 @@ export function FindingsPage() {
           <span className="sev-count sev--error"><span className="sev-mark sev-mark--error" aria-hidden="true" /> {counts.error} hata</span>
           <span className="sev-count sev--warning"><span className="sev-mark sev-mark--warning" aria-hidden="true" /> {counts.warning} uyarı</span>
           <span className="sev-count sev--info"><span className="sev-mark sev-mark--info" aria-hidden="true" /> {counts.info} bilgi</span>
+          <span className="findings__shown gauge">{shown} gösteriliyor</span>
         </p>
-        <Segmented<Level>
-          ariaLabel="Önem filtresi"
-          size="sm"
-          value={level}
-          onChange={setLevel}
-          options={[
-            { value: 'all', label: 'Tümü' },
-            { value: 'warning', label: 'Hata + uyarı' },
-            { value: 'error', label: 'Yalnız hata' },
-          ]}
-        />
+        <FindingFilterBar />
       </div>
-      {groups.length === 0 ? (
-        <p className="muted findings__empty">Bu filtreyle bulgu yok.</p>
+      {rows.length === 0 ? (
+        <p className="muted findings__empty">Bu filtreyle bulgu yok. Önem filtresini “Tümü” yapmayı deneyin.</p>
       ) : (
-        <div className="findings__grid">
-          {groups.map((g) => (
-            <section key={g.category} className={`fgroup sev--${g.worst}`} aria-labelledby={`fg-${g.category}`}>
-              <h3 id={`fg-${g.category}`} className="fgroup__title">
-                {CATEGORY_LABEL[g.category]}
-                <span className="gauge">{g.items.length}</span>
+        <VirtualList<FindingRow>
+          className="findings__list"
+          ariaLabel="Bulgu listesi"
+          items={rows}
+          itemKey={rowKey}
+          estimate={estimate}
+          threshold={80}
+          itemClassName={(r) => (r.kind === 'cat' ? 'frow-cat' : 'frow-card')}
+          renderItem={(r) =>
+            r.kind === 'cat' ? (
+              <h3 className={`fgroup__title sev--${r.worst}`}>
+                <span className={`sev-mark sev-mark--${r.worst}`} aria-hidden="true" />
+                {CATEGORY_LABEL[r.category]}
+                <span className="gauge">{r.count}</span>
               </h3>
-              <div className="fgroup__items">
-                {g.items.map((f) => (
-                  <FindingCard key={f.id} finding={f} />
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+            ) : (
+              <FindingCard finding={r.finding} />
+            )
+          }
+        />
       )}
     </div>
   );
