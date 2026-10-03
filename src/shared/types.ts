@@ -365,6 +365,61 @@ export interface ReviewJob {
   error?: ApiError; // status 'error'
 }
 
+// ---------------------------------------------------------------------------
+// Kod gezinme (Tur 4): koddaki tıklanabilir referanslar ve sembol konumları
+// ---------------------------------------------------------------------------
+
+/** Bir dosyadaki sembol bildirimi (tip, metot, yapıcı, alan, enum sabiti). */
+export interface SymbolDecl {
+  id: string; // ReviewModel'deki id ile aynı biçim (çift FQN'de '@kök' soneki dahil)
+  kind: SymbolKind;
+  name: string;
+  signature: string;
+  ownerTypeId?: string; // üyeler için
+  range: Range; // bildirim aralığı (javadoc hariç)
+  /** Bildirimdeki ad tanımlayıcısının konumu: satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
+  nameLine: number;
+  nameStartCol: number;
+  nameEndCol: number;
+  /** Sembol ReviewModel'de değişen bir öğeyse durumu; değilse undefined. */
+  status?: ChangeStatus;
+}
+
+/** Kodda tıklanabilir bir referans (çağrı, yapıcı, tip adı, metot referansı). */
+export interface SymbolRef {
+  line: number; // 1 tabanlı
+  startCol: number; // satır içi 0 tabanlı UTF-16, dahil
+  endCol: number; // hariç
+  name: string;
+  kind: 'call' | 'constructor' | 'type' | 'methodRef';
+  /** Çözülen hedef sembol id'leri (aşırı yüklemede birden çok olabilir; çözülemezse boş). */
+  targets: string[];
+  confidence?: 'exact' | 'likely' | 'name-only';
+}
+
+export interface FileOutline {
+  path: string;
+  side: 'old' | 'new';
+  inDiff: boolean;
+  packageName?: string;
+  decls: SymbolDecl[];
+  /** Yalnızca Java dosyalarında; 'old' tarafta hedefler çözülmeyebilir (boş targets). */
+  refs: SymbolRef[];
+}
+
+/** Herhangi bir sembolün (diff içi ya da dışı) konumu. */
+export interface SymbolLocation {
+  id: string;
+  kind: SymbolKind;
+  name: string;
+  signature?: string;
+  path: string;
+  side: 'old' | 'new'; // silinmiş semboller 'old'
+  range: Range;
+  inDiff: boolean; // dosya bu review'un değişen dosyalarından biri mi
+  typeId?: string; // sembolün ait olduğu (ya da kendisi olan) tip id'si
+}
+
 /*
  * Uç noktalar (hepsi JSON):
  *   GET  /api/config                                   -> AppConfig
@@ -377,4 +432,6 @@ export interface ReviewJob {
  *   GET  /api/reviews/:id                              -> ReviewModel
  *   GET  /api/reviews/:id/file?path=...&side=old|new   -> { path: string; side: 'old'|'new'; content: string | null }
  *        (diff dışındaki repo dosyaları da: head/base ağacından okunur)
+ *   GET  /api/reviews/:id/outline?path=...&side=old|new -> FileOutline   (Java değilse decls/refs boş; dosya yoksa 404)
+ *   GET  /api/reviews/:id/locate?id=<sembol id>        -> SymbolLocation (bulunamazsa 404)
  */
