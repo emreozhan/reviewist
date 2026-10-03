@@ -19,6 +19,7 @@ import type {
 import { baseTypeName, collapseWs, eraseTypeForId, simpleName, stripTypeArgs } from './names.js';
 import { maskedTokens, maskVarargsAnnotations } from './mask.js';
 import { getJavaParser } from './parser.js';
+import { TYPE_REF_ANNOTATION, TYPE_REF_EXPR, TypeRefTableBuilder } from './typeRefTable.js';
 
 // ---------------------------------------------------------------------------
 // Token / yorum toplama
@@ -39,6 +40,23 @@ interface Cmt {
 const ATOMIC_TOKENS = new Set(['string_literal', 'character_literal']);
 const COMMENT_TYPES = new Set(['line_comment', 'block_comment']);
 
+/** Büyük harfle başlayan Java tanımlayıcısı (Unicode: `Ödeme`). */
+const UPPER_IDENT = /^\p{Lu}[\p{L}\p{N}_$]*$/u;
+const HAS_LOWER = /\p{Ll}/u;
+
+/** Satır/sütun (sütun satır içi 0 tabanlı UTF-16 kod birimi). */
+interface Pos {
+  line: number;
+  col: number;
+}
+
+/** Tip tanımlayıcısı düğümü (kod gezinme için; düğüm nesnesi oluşturulmaz). */
+interface TypeIdEvent {
+  s: number;
+  e: number;
+  scoped: boolean;
+}
+
 /** Analiz için tek geçişte kaydedilen düğüm (önsıralı; başlangıca göre artan). */
 interface NodeEvent {
   s: number;
@@ -51,8 +69,29 @@ class FileCtx {
   readonly toks: Tok[] = [];
   readonly cmts: Cmt[] = [];
   readonly events: NodeEvent[] = [];
+  /** type_identifier / scoped_type_identifier düğümleri (önsıralı). */
+  readonly typeIds: TypeIdEvent[] = [];
+  private lineStarts: number[] | undefined;
 
   constructor(readonly src: string) {}
+
+  /** Kaynak konumunun (UTF-16 indeks) satırı (1 tabanlı) ve satır içi sütunu (0 tabanlı UTF-16). */
+  pos(index: number): Pos {
+    if (!this.lineStarts) {
+      const ls = [0];
+      for (let i = this.src.indexOf('\n'); i >= 0; i = this.src.indexOf('\n', i + 1)) ls.push(i + 1);
+      this.lineStarts = ls;
+    }
+    const ls = this.lineStarts;
+    let lo = 0;
+    let hi = ls.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if ((ls[mid] as number) <= index) lo = mid;
+      else hi = mid - 1;
+    }
+    return { line: lo + 1, col: index - (ls[lo] as number) };
+  }
 
   /** Tek ağaç geçişi: tokenlar, yorumlar ve analiz olayları. */
   collect(root: Node): void {
@@ -66,6 +105,8 @@ class FileCtx {
           const e = c.endIndex;
           if (INTERESTING.has(type)) this.events.push({ s, e, type, node: c.currentNode });
           else if (COUNTED.has(type)) this.events.push({ s, e, type });
+          else if (type === 'type_identifier') this.typeIds.push({ s, e, scoped: false });
+          else if (type === 'scoped_type_identifier') this.typeIds.push({ s, e, scoped: true });
           if (COMMENT_TYPES.has(type)) {
             this.cmts.push({ s, e, t: this.src.slice(s, e) });
           } else if (ATOMIC_TOKENS.has(type)) {
@@ -216,6 +257,76 @@ class FileCtx {
       prev = x;
     }
     return [...out];
+  }
+
+  /**
+   * (Tur 4) Tip referansı konumları: tip konumundaki tanımlayıcılar (alan/parametre/dönüş/yerel tipleri, extends/implements,
+   * `new X`, cast, `X.class`, generic argümanları, throws, catch) + tokenlardan ifade konumundaki büyük harfli adlar
+   * (`Foo.bar()`, `Foo.CONST`, `Foo::x` alıcısı; `Outer.Inner.x()` zinciri) ve anotasyon adları (maskelenenler dahil).
+   */
+  typeRefTable(): ReturnType<TypeRefTableBuilder['build']> {
+    const refs: { s: number; e: number; name: string; flags: number }[] = [];
+    const seen = new Set<number>();
+    const ids = this.typeIds;
+    let i = 0;
+    while (i < ids.length) {
+      const x = ids[i] as TypeIdEvent;
+      if (!x.scoped) {
+        const text = this.src.slice(x.s, x.e);
+        if (UPPER_IDENT.test(text)) refs.push({ s: x.s, e: x.e, name: text, flags: 0 });
+        seen.add(x.s);
+        i++;
+        continue;
+      }
+      // en dıştaki nitelikli tip: içindeki tanımlayıcılar '.' ile zincirlenir (paket parçaları küçük harfli, atlanır)
+      let j = i + 1;
+      const chain: string[] = [];
+      let prevEnd = -1;
+      for (; j < ids.length && (ids[j] as TypeIdEvent).s < x.e; j++) {
+        const sg = ids[j] as TypeIdEvent;
+        if (sg.scoped) continue;
+        const text = this.src.slice(sg.s, sg.e);
+        if (chain.length && this.src.slice(prevEnd, sg.s).trim() !== '.') chain.length = 0;
+        chain.push(text);
+        prevEnd = sg.e;
+        seen.add(sg.s);
+        if (UPPER_IDENT.test(text)) refs.push({ s: sg.s, e: sg.e, name: chain.join('.'), flags: 0 });
+      }
+      i = j;
+    }
+    const toks = this.toks;
+    for (let k = 0; k < toks.length; k++) {
+      const t = toks[k] as Tok;
+      if (seen.has(t.s) || !UPPER_IDENT.test(t.t)) continue;
+      const prev = toks[k - 1]?.t;
+      if (prev === '@') {
+        refs.push({ s: t.s, e: t.e, name: t.t, flags: TYPE_REF_ANNOTATION });
+        continue;
+      }
+      if (prev === '.' || !HAS_LOWER.test(t.t)) continue;
+      const next = toks[k + 1]?.t;
+      if (next !== '.' && next !== '::') continue;
+      refs.push({ s: t.s, e: t.e, name: t.t, flags: TYPE_REF_EXPR });
+      // Outer.Inner.x() zinciri
+      let name = t.t;
+      let m = k;
+      for (;;) {
+        const seg = toks[m + 2];
+        const after = toks[m + 3]?.t;
+        if (toks[m + 1]?.t !== '.' || !seg || !UPPER_IDENT.test(seg.t) || !HAS_LOWER.test(seg.t) || (after !== '.' && after !== '::')) break;
+        name = `${name}.${seg.t}`;
+        refs.push({ s: seg.s, e: seg.e, name, flags: TYPE_REF_EXPR });
+        seen.add(seg.s);
+        m += 2;
+      }
+    }
+    refs.sort((a, b) => a.s - b.s);
+    const b = new TypeRefTableBuilder();
+    for (const r of refs) {
+      const p = this.pos(r.s);
+      b.add(r.name, p.line, p.col, p.col + (r.e - r.s), r.flags);
+    }
+    return b.build();
   }
 
   comments(s: number, e: number): Cmt[] {
@@ -452,6 +563,27 @@ function isNullCheckCall(objText: string | undefined, name: string): boolean {
   return objText === 'Optional' || objText === 'java.util.Optional';
 }
 
+/** Çağrı yerine ad tanımlayıcısının konumunu yazar ([s, e) kaynak indeksleri; tek satırlık ad varsayılır). */
+function setSiteName(ctx: FileCtx, site: CallSite, s: number, e: number): void {
+  const p = ctx.pos(s);
+  site.col = p.col;
+  site.endCol = p.col + (e - s);
+  if (p.line !== site.line) site.nameLine = p.line;
+}
+
+const LAST_IDENT = /([\p{L}_$][\p{L}\p{N}_$]*)\s*$/u;
+
+/** `new a.b.Foo<X>()` tip düğümünde basit tip adının [s, e) aralığı. */
+function typeNameSpan(ctx: FileCtx, t: Node): { s: number; e: number } | undefined {
+  const text = ctx.slice(t);
+  const lt = text.indexOf('<');
+  const head = lt >= 0 ? text.slice(0, lt) : text;
+  const m = LAST_IDENT.exec(head);
+  if (!m || m[1] === undefined) return undefined;
+  const s = t.startIndex + m.index;
+  return { s, e: s + m[1].length };
+}
+
 function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
   switch (n.type) {
     case 'method_invocation': {
@@ -468,6 +600,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         isMethodRef: false,
         args: argTextsOf(ctx, args),
       };
+      if (nameNode) setSiteName(ctx, site, nameNode.startIndex, nameNode.endIndex);
       const objText = obj ? collapseWs(ctx.slice(obj)).replace(/\s*\.\s*/g, '.') : undefined;
       if (objText !== undefined) site.receiver = objText;
       a.callSites.push(site);
@@ -490,6 +623,8 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         args: argTextsOf(ctx, args),
       };
       if (obj) site.receiver = collapseWs(ctx.slice(obj));
+      const span = t ? typeNameSpan(ctx, t) : undefined;
+      if (span) setSiteName(ctx, site, span.s, span.e);
       a.callSites.push(site);
       return;
     }
@@ -497,7 +632,14 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       const kids = namedNonComment(n);
       const recv = kids[0] ?? null;
       let isCtor = false;
-      for (let i = 0; i < n.childCount; i++) if (n.child(i)?.type === 'new') isCtor = true;
+      let newNode: Node | null = null;
+      for (let i = 0; i < n.childCount; i++) {
+        const ch = n.child(i);
+        if (ch?.type === 'new') {
+          isCtor = true;
+          newNode = ch;
+        }
+      }
       const last = kids.length > 1 ? kids[kids.length - 1] : undefined;
       const recvText = recv ? collapseWs(ctx.slice(recv)) : '';
       const site: CallSite = {
@@ -509,6 +651,8 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         isMethodRef: true,
       };
       if (recvText) site.receiver = recvText;
+      const nameAt = isCtor ? newNode : (last ?? null);
+      if (nameAt) setSiteName(ctx, site, nameAt.startIndex, nameAt.endIndex);
       a.callSites.push(site);
       if (recvText === 'System.out' || recvText === 'System.err') a.features.systemOut++;
       if (!isCtor && (recvText === 'Objects' || recvText === 'java.util.Objects') && NULL_SAFE_OBJECTS.has(site.name)) {
@@ -520,7 +664,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       const ctor = n.childForFieldName('constructor');
       const isSuper = ctor?.type === 'super';
       const args = n.childForFieldName('arguments');
-      a.callSites.push({
+      const site: CallSite = {
         name: isSuper ? (owner.superSimpleName ?? 'super') : owner.simpleName,
         argCount: argCountOf(args),
         receiverKind: isSuper ? 'super' : 'this',
@@ -529,7 +673,9 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
         isConstructor: true,
         isMethodRef: false,
         args: argTextsOf(ctx, args),
-      });
+      };
+      if (ctor) setSiteName(ctx, site, ctor.startIndex, ctor.endIndex);
+      a.callSites.push(site);
       return;
     }
     case 'formal_parameter': {
@@ -846,6 +992,18 @@ function anonymousClassesIn(ctx: FileCtx, nodes: (Node | null | undefined)[]): A
   return out;
 }
 
+/** Bildirim ad tanımlayıcısının konumunu üye/tipe yazar ([s, e) kaynak indeksleri). */
+function setDeclName(ctx: FileCtx, target: JavaMember | JavaType, s: number, e: number): void {
+  const p = ctx.pos(s);
+  target.nameLine = p.line;
+  target.nameCol = p.col;
+  target.nameEndCol = p.col + (e - s);
+}
+
+function setDeclNameNode(ctx: FileCtx, target: JavaMember | JavaType, n: Node | null | undefined): void {
+  if (n) setDeclName(ctx, target, n.startIndex, n.endIndex);
+}
+
 function memberVisibility(tc: TypeCtx, mods: string[]): Visibility {
   return explicitVisibility(mods) ?? (tc.isInterfaceLike ? 'public' : 'package');
 }
@@ -892,6 +1050,7 @@ function extractMethod(ctx: FileCtx, tc: TypeCtx, n: Node): JavaMember {
   m.throws = throwsList;
   if (returnType) m.returnType = returnType;
   if (typeParams) m.typeParams = typeParams;
+  setDeclNameNode(ctx, m, nameNode);
   return m;
 }
 
@@ -926,6 +1085,7 @@ function extractConstructor(ctx: FileCtx, tc: TypeCtx, n: Node, recordParams: Ja
   if (compact) {
     for (const p of params) if (!(p.name in m.localTypes)) m.localTypes[p.name] = p.type;
   }
+  setDeclNameNode(ctx, m, nameNode);
   return m;
 }
 
@@ -956,6 +1116,7 @@ function extractFields(ctx: FileCtx, tc: TypeCtx, n: Node): JavaMember[] {
       bodyNode: value,
     });
     m.fieldType = fieldType;
+    setDeclNameNode(ctx, m, nm);
     if (value) m.initializerText = ctx.slice(value);
     if (!single) {
       // Çoklu bildirici: her alan için yalnız kendi bildiricisini içeren sentetik metin
@@ -989,6 +1150,7 @@ function extractEnumConstant(ctx: FileCtx, tc: TypeCtx, n: Node): JavaMember {
   const end = body ?? args;
   m.normalizedBody = start && end ? ctx.compact(start.startIndex, end.endIndex) : '';
   m.fieldType = tc.type.name;
+  setDeclNameNode(ctx, m, nm);
   return m;
 }
 
@@ -996,7 +1158,7 @@ function extractInitializer(ctx: FileCtx, tc: TypeCtx, n: Node, isStatic: boolea
   const seq = isStatic ? tc.clinit++ : tc.init++;
   const name = isStatic ? '<clinit>' : '<init>';
   const block = isStatic ? childOfType(n, 'block') : n;
-  return baseMember(ctx, tc, n, {
+  const m = baseMember(ctx, tc, n, {
     kind: 'initializer',
     name,
     id: `${tc.type.fqn}#${name}#${seq}`,
@@ -1006,6 +1168,9 @@ function extractInitializer(ctx: FileCtx, tc: TypeCtx, n: Node, isStatic: boolea
     analysisNodes: [block],
     bodyNode: block,
   });
+  // adsız: `static` ya da `{` belirteci
+  setDeclName(ctx, m, n.startIndex, n.startIndex + (isStatic ? 'static'.length : 1));
+  return m;
 }
 
 function extractRecordComponents(ctx: FileCtx, tc: TypeCtx, paramsNode: Node | null): { params: JavaParam[]; members: JavaMember[] } {
@@ -1030,6 +1195,9 @@ function extractRecordComponents(ctx: FileCtx, tc: TypeCtx, paramsNode: Node | n
     delete m.javadoc;
     delete m.javadocRange;
     m.fieldType = p.type;
+    const nameNode =
+      pn.childForFieldName('name') ?? namedNonComment(pn).find((x) => x.type === 'variable_declarator')?.childForFieldName('name');
+    setDeclNameNode(ctx, m, nameNode);
     members.push(m);
   });
   return { params, members };
@@ -1087,6 +1255,7 @@ function extractType(
   if (tpNode) type.typeParams = collapseWs(ctx.slice(tpNode));
   if (supers.superclass) type.superclass = supers.superclass;
   if (jd) type.javadoc = jd.text;
+  setDeclNameNode(ctx, type, nameNode);
   if (outer) {
     type.outerFqn = outer.fqn;
     outer.nestedTypeFqns.push(fqn);
@@ -1217,6 +1386,7 @@ export async function parseJavaFile(path: string, source: string): Promise<JavaF
     ctx.collect(root);
     if (masked) ctx.addTokens(maskedTokens(source, masked.spans));
     model.typeRefs = ctx.typeRefs();
+    model.typeRefPositions = ctx.typeRefTable();
     const codeParts: string[] = [];
     for (const ch of namedNonComment(root)) {
       if (ch.type === 'package_declaration') {

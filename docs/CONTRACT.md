@@ -62,3 +62,11 @@ export async function buildReview(cs: ChangeSet, opts?: BuildReviewOptions): Pro
 - `ImpactNode.range` / `rangeSide`: diff dışı önizleme için bildirim aralığı. `rangeSide === 'old'` ise dosya `FileChange.oldPath ?? path` ile old tarafından okunur.
 - `CallSite.args?: string[]` (model.ts): argüman metinleri; tip uyuşmazlığı tespiti için.
 - `ChangeFlag 'supertypes'`, `ApiError.field`, `DELETE /api/reviews/:id`.
+
+## Tur 4 eklemeleri (kod gezinme)
+
+- `GET /api/reviews/:id/outline?path&side` → `FileOutline` (bildirimler + tıklanabilir referanslar, hedefler ReviewModel id biçiminde). side=old'da yeniden adlandırılmış dosya için `path = FileChange.oldPath`.
+- `GET /api/reviews/:id/locate?id` → `SymbolLocation` (diff içi/dışı, silinmiş, `@kök`, `$anon`).
+- core: `BuildReviewOptions.onArtifacts` → `ReviewArtifacts { index, newFiles, oldFiles, ids }`; `buildArtifacts(cs, opts)` model üretmeden artefaktları yeniden kurar. Gezinme mantığı `src/core/navigation.ts` (`ReviewNavigator`).
+- Sunucu artefaktları en son 3 review için tutar (`NavigatorCache`); düşenler ilk istekte yeniden kurulur (ayrıştırma önbelleği sayesinde ucuz).
+- model.ts opsiyonel ekler: `CallSite.col/endCol/nameLine`, üye/tip `nameLine/nameCol/nameEndCol`, `JavaFileModel.typeRefPositions` (sıkıştırılmış tablo, `decodeTypeRefPositions`).

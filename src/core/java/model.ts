@@ -41,6 +41,15 @@ export interface CallSite {
    * Metot referansında yok. Tip çıkarımı (literal, yerel değişken) için; eski çağrı/yeni imza uyuşmazlığı tespitinde kullanılır.
    */
   args?: string[];
+  /**
+   * (Tur 4) Çağrılan ad tanımlayıcısının sütun aralığı: satır içi 0 tabanlı UTF-16 kod birimi, [col, endCol).
+   * Metot çağrısında metot adı, yapıcıda tip adı (`new a.B<X>()` içinde `B`), metot referansında `::` sonrası ad
+   * (`X::new` içinde `new`), `this(...)`/`super(...)` çağrısında anahtar sözcük.
+   */
+  col?: number;
+  endCol?: number;
+  /** (Tur 4) Ad tanımlayıcısı `line`dan farklı satırdaysa (ör. `new` ile tip adı ayrı satırda) o satır (1 tabanlı). */
+  nameLine?: number;
 }
 
 export interface CodeFeatures {
@@ -96,6 +105,10 @@ export interface JavaMember {
    * Sentetik id'ler `getMember` ile çözülmez.
    */
   anonymousClasses?: AnonymousClassInfo[];
+  /** Bildirimdeki ad tanımlayıcısının konumu (Tur 4; initializer'da `static`/`{` belirteci): satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
+  nameLine?: number;
+  nameCol?: number;
+  nameEndCol?: number;
 }
 
 /** (Tur 3) Anonim sınıf özeti. */
@@ -122,6 +135,10 @@ export interface JavaType {
   nestedTypeFqns: string[];
   fieldTypes: Record<string, string>; // alan adı -> tip (kalıtılanlar hariç)
   normalizedText: string; // yorum/boşluk normalize edilmiş tüm tip metni
+  /** Bildirimdeki ad tanımlayıcısının konumu (Tur 4): satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
+  nameLine?: number;
+  nameCol?: number;
+  nameEndCol?: number;
 }
 
 export interface JavaImport {
@@ -147,6 +164,21 @@ export interface JavaFileModel {
    * Önünde '.' olan tamamı büyük harfli adlar (sabitler: `Foo.MAX`) hariç. filesReferencingType bunu kullanır.
    */
   typeRefs?: string[];
+  /**
+   * (Tur 4) Tip referanslarının konumları (kod gezinme için); `decodeTypeRefPositions` (typeRefTable.ts) ile okunur.
+   * Bellek için sıkıştırılmış: `data` her referans için 5 sayı tutar:
+   * [names indeksi, satır (1 tabanlı), başlangıç sütunu, bitiş sütunu (hariç), bayraklar]. Sütunlar UTF-16 kod birimi.
+   * Bayraklar (bit): 1 = ifade konumu (`Foo.bar()` alıcısı, `Foo::x`, `Foo.CONST`; değişken de olabilir),
+   * 2 = anotasyon adı. Nitelikli adda (`a.b.Outer.Inner`) büyük harfli her parça için ayrı referans
+   * (ad = o parçaya kadarki nitelikli metin, konum = parçanın kendisi).
+   */
+  typeRefPositions?: TypeRefTable;
+}
+
+/** (Tur 4) Sıkıştırılmış tip referansı tablosu (bkz. JavaFileModel.typeRefPositions). */
+export interface TypeRefTable {
+  names: string[];
+  data: Int32Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +256,11 @@ export interface RepoIndexApi {
   targetsOfCallSite(fromId: string, line: number, name: string): string[];
   /** (Tur 3) Aynı FQN'i bildiren tüm tipler (guava flavor'ları gibi çok kaynak köklü repolar). */
   typesByFqn(fqn: string): { type: JavaType; file: JavaFileModel }[];
+  /**
+   * (Tur 4, opsiyonel) `targetsOfCallSite` ile aynı anahtar için bağlama güveni; aynı anahtarda birden çok bağlama
+   * varsa en zayıfı. Bağlanmamışsa undefined.
+   */
+  callSiteConfidence?(fromId: string, line: number, name: string): CallRef['confidence'] | undefined;
 }
 
 /**

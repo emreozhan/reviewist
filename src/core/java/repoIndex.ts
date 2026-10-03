@@ -34,6 +34,8 @@ const JAVA_LANG = new Set([
 
 const MAX_NAME_ONLY = 5;
 
+const CONFIDENCE_RANK: Record<CallRef['confidence'], number> = { 'name-only': 0, likely: 1, exact: 2 };
+
 type Confidence = CallRef['confidence'];
 
 interface TypeEntry {
@@ -243,6 +245,8 @@ export class RepoIndex implements RepoIndexApi {
   private readonly calleesMap = new Map<string, Set<string>>();
   private readonly sitesByName = new Map<string, SiteRec[]>();
   private readonly siteTargets = new Map<string, Set<string>>();
+  /** (Tur 4) siteTargets anahtarı → bağlama güveni (birden çok bağlamada en zayıfı). */
+  private readonly siteConfidence = new Map<string, Confidence>();
   private readonly filesBySimpleRef = new Map<string, Set<string>>();
   private readonly filesByImport = new Map<string, Set<string>>();
   private readonly resolveCache = new WeakMap<JavaFileModel, Map<string, string | undefined>>();
@@ -981,6 +985,8 @@ export class RepoIndex implements RepoIndexApi {
         this.siteTargets.set(key, set);
       }
       for (const t of targets) set.add(t);
+      const prev = this.siteConfidence.get(key);
+      if (targets.length && (prev === undefined || CONFIDENCE_RANK[confidence] < CONFIDENCE_RANK[prev])) this.siteConfidence.set(key, confidence);
     }
     for (const t of targets) {
       pushMap(this.callersMap, t, { fromId, file: rec.file.path, line: rec.site.line, inChangedCode: false, confidence });
@@ -1243,6 +1249,10 @@ export class RepoIndex implements RepoIndexApi {
    */
   targetsOfCallSite(fromId: string, line: number, name: string): string[] {
     return [...(this.siteTargets.get(siteKey(fromId, line, name)) ?? [])];
+  }
+
+  callSiteConfidence(fromId: string, line: number, name: string): Confidence | undefined {
+    return this.siteConfidence.get(siteKey(fromId, line, name));
   }
 
   // -------------------------------------------------------------------------

@@ -23,7 +23,7 @@ import { createModuleResolver, detectLanguage, detectLayer, isHexagonalRepo, isT
 import { buildReviewPlan } from './analysis/reviewPlan.js';
 import { isBreakingSignature, isSemanticChange } from './analysis/risk.js';
 import { assignLayers, scoreAll } from './analysis/scoring.js';
-import { assignUniqueIds, sourceRootFor } from './analysis/symbolIds.js';
+import { assignUniqueIds, sourceRootFor, type SymbolIds } from './analysis/symbolIds.js';
 import { TestLocator, testFindings } from './analysis/testMapping.js';
 import { changedLineSets, emptyRisk, errorMessage, mapLimit, progressCounter } from './analysis/util.js';
 
@@ -33,7 +33,29 @@ export interface BuildReviewOptions {
   onProgress?: (msg: string) => void;
   /** Aşama süreleri (ms): readChanged, parseChanged, indexParse, indexBuild, enrich, riskAndTests, planGraphFindings, total. Ölçüm/log için. */
   onTimings?: (timings: Readonly<Record<string, number>>) => void;
+  /**
+   * (Tur 4) Analiz artefaktları hazır olunca (repo indeksi kurulduktan sonra, model dönmeden önce) çağrılır.
+   * Kod gezinme uçları (outline/locate) için sunucu bunları saklar.
+   */
+  onArtifacts?: (artifacts: ReviewArtifacts) => void;
 }
+
+/**
+ * (Tur 4) Review başına analiz artefaktları: kod gezinme (outline/locate) bunlarla ReviewModel id'leriyle aynı biçimde
+ * id üretir. Modeller ayrıştırma önbelleğiyle paylaşılır: DEĞİŞTİRİLMEMELİDİR.
+ */
+export interface ReviewArtifacts {
+  /** Head repo indeksi (indeks id'leri: '@kök' soneksiz). */
+  index: RepoIndexApi;
+  /** Değişen Java dosyalarının head modelleri (yeni yol → model). */
+  newFiles: ReadonlyMap<string, JavaFileModel>;
+  /** Değişen Java dosyalarının base modelleri (eski yol → model). */
+  oldFiles: ReadonlyMap<string, JavaFileModel>;
+  /** Model id ↔ indeks id (B3 '@kök' soneki). */
+  ids: SymbolIds;
+}
+
+export type { SymbolIds };
 
 const READ_CONCURRENCY = 16;
 /** Diff dışı dosyalar: kaynak (git cat-file vb.) G/Ç'si baskın olduğundan daha yüksek eşzamanlılık. */
@@ -293,13 +315,27 @@ async function buildIndex(
   }
 }
 
-export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}): Promise<ReviewModel> {
-  const progress = opts.onProgress ?? (() => undefined);
-  const warnings: string[] = [];
-  const maxIndexFiles = opts.maxIndexFiles ?? DEFAULT_MAX_INDEX_FILES;
-  const tStart = performance.now();
-  const timings: Record<string, number> = {};
+interface Structure {
+  files: AnalyzedFile[];
+  byPath: Map<string, AnalyzedFile>;
+  javaFiles: AnalyzedFile[];
+  allDiffs: TypeDiff[];
+  ids: SymbolIds;
+  index: RepoIndexApi;
+  changedPaths: string[];
+  repoFiles: string[];
+  repoFilesKnown: boolean;
+  hexagonal: boolean;
+}
 
+/** Adım 1-3: iskeletler, değişen Java dosyalarının ayrıştırılması + semantik diff, '@kök' id'leri, repo indeksi. */
+async function analyzeStructure(
+  cs: ChangeSet,
+  maxIndexFiles: number,
+  warnings: string[],
+  progress: (msg: string) => void,
+  timings: Record<string, number>,
+): Promise<Structure> {
   // 1. İskeletler
   progress(`Değişiklik kümesi hazırlanıyor (${cs.files.length} dosya)`);
   const listed = await safeList(cs, undefined, warnings);
@@ -389,6 +425,42 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
     const model = index.files.get(path) ?? byPath.get(path)?.newModel;
     return model ? sourceRootFor(path, model.packageName) : undefined;
   };
+
+  return { files, byPath, javaFiles, allDiffs, ids, index, changedPaths, repoFiles, repoFilesKnown, hexagonal };
+}
+
+function artifactsOf(st: Structure): ReviewArtifacts {
+  const newFiles = new Map<string, JavaFileModel>();
+  const oldFiles = new Map<string, JavaFileModel>();
+  for (const af of st.javaFiles) {
+    if (af.newModel) newFiles.set(af.file.path, af.newModel);
+    if (af.oldModel) oldFiles.set(af.cs.oldPath ?? af.cs.path, af.oldModel);
+  }
+  return { index: st.index, newFiles, oldFiles, ids: st.ids };
+}
+
+/**
+ * (Tur 4) Yalnız artefaktları kurar (ReviewModel üretmeden): bellekten düşmüş bir review için outline/locate
+ * istendiğinde. Ayrıştırma blob SHA önbelleğinden geldiğinden tam analizden ucuzdur; id'ler aynı ChangeSet için
+ * buildReview ile aynıdır (aynı maxIndexFiles verilmelidir).
+ */
+export async function buildArtifacts(
+  cs: ChangeSet,
+  opts: Pick<BuildReviewOptions, 'maxIndexFiles' | 'onProgress'> = {},
+): Promise<ReviewArtifacts> {
+  const st = await analyzeStructure(cs, opts.maxIndexFiles ?? DEFAULT_MAX_INDEX_FILES, [], opts.onProgress ?? (() => undefined), {});
+  return artifactsOf(st);
+}
+
+export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}): Promise<ReviewModel> {
+  const progress = opts.onProgress ?? (() => undefined);
+  const warnings: string[] = [];
+  const maxIndexFiles = opts.maxIndexFiles ?? DEFAULT_MAX_INDEX_FILES;
+  const tStart = performance.now();
+  const timings: Record<string, number> = {};
+  const st = await analyzeStructure(cs, maxIndexFiles, warnings, progress, timings);
+  const { files, byPath, javaFiles, allDiffs, ids, index, changedPaths, repoFiles, repoFilesKnown, hexagonal } = st;
+  opts.onArtifacts?.(artifactsOf(st));
 
   const ctx: AnalysisContext = {
     files,

@@ -20,6 +20,8 @@ import type {
   ReviewModel,
   ReviewRequest,
 } from '../shared/types.js';
+import type { ReviewArtifacts } from '../core/buildReview.js';
+import { ReviewNavigator } from '../core/navigation.js';
 import { createChangeSet, parseReviewRequest, type CreateChangeSetOptions } from '../sources/index.js';
 import { sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
 import { isSourceError, shortMessage, SourceError } from '../sources/errors.js';
@@ -32,8 +34,15 @@ export interface BuildReviewOptions {
   id?: string;
   maxIndexFiles?: number;
   onProgress?: (msg: string) => void;
+  /** (Tur 4) Kod gezinme artefaktları (repo indeksi, değişen dosya modelleri, '@kök' id eşlemesi). */
+  onArtifacts?: (artifacts: ReviewArtifacts) => void;
 }
 export type BuildReviewFn = (cs: ChangeSet, opts?: BuildReviewOptions) => Promise<ReviewModel>;
+/** (Tur 4) Bellekten düşen review için artefaktları yeniden kurar (`src/core/buildReview.ts` buildArtifacts). */
+export type BuildArtifactsFn = (
+  cs: ChangeSet,
+  opts?: { maxIndexFiles?: number; onProgress?: (msg: string) => void },
+) => Promise<ReviewArtifacts>;
 
 export type CreateChangeSetFn = (req: ReviewRequest, opts: CreateChangeSetOptions) => Promise<ManagedChangeSet>;
 
@@ -51,6 +60,13 @@ export interface CreateAppOptions {
   tokenEnvNames?: readonly string[];
   /** Bellekte tutulacak en fazla review (LRU). Varsayılan 20. */
   maxReviews?: number;
+  /**
+   * (Tur 4) Kod gezinme artefaktları (repo indeksi vb.) bellekte tutulan en fazla review (LRU). Varsayılan 3
+   * (guava ölçeğinde indeks yüzlerce MB). Düşenler outline/locate isteğinde yeniden kurulur.
+   */
+  maxNavigationCaches?: number;
+  /** Test için artefakt kurucu; varsayılan `../core/buildReview.js` buildArtifacts. */
+  buildArtifacts?: BuildArtifactsFn;
   /** Aynı anda en fazla kaç analiz (fazlası kuyrukta bekler). Varsayılan 2. */
   maxConcurrentAnalyses?: number;
   /** Biten işlerin tutulma süresi (ms). Varsayılan 10 dk. */
@@ -213,6 +229,67 @@ function safeDispose(cs: ManagedChangeSet): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Kod gezinme önbelleği (Tur 4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Review başına ReviewNavigator (artefaktlarıyla) LRU'su. Eksikse `create` ile kurulur; aynı review için eşzamanlı
+ * istekler aynı kurulumu bekler. Kurulum başarısızsa girdi silinir (sonraki istek yeniden dener).
+ */
+export class NavigatorCache {
+  private readonly map = new Map<string, Promise<ReviewNavigator>>();
+  /** Yeniden kurulum sayısı (tanı/test). */
+  rebuilds = 0;
+
+  constructor(private readonly max: number) {}
+
+  set(id: string, nav: ReviewNavigator): void {
+    this.map.delete(id);
+    this.map.set(id, Promise.resolve(nav));
+    this.evict();
+  }
+
+  has(id: string): boolean {
+    return this.map.has(id);
+  }
+
+  delete(id: string): void {
+    this.map.delete(id);
+  }
+
+  get size(): number {
+    return this.map.size;
+  }
+
+  async get(id: string, create: () => Promise<ReviewNavigator>): Promise<ReviewNavigator> {
+    let p = this.map.get(id);
+    if (p) {
+      this.map.delete(id);
+      this.map.set(id, p);
+      return await p;
+    }
+    this.rebuilds++;
+    p = create();
+    this.map.set(id, p);
+    this.evict();
+    try {
+      return await p;
+    } catch (err) {
+      if (this.map.get(id) === p) this.map.delete(id);
+      throw err;
+    }
+  }
+
+  private evict(): void {
+    while (this.map.size > this.max) {
+      const oldest = this.map.keys().next().value;
+      if (oldest === undefined) break;
+      this.map.delete(oldest);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Güvenlik yardımcıları
 // ---------------------------------------------------------------------------
 
@@ -258,21 +335,38 @@ function apiError(c: Context, status: number, error: string, detail?: string, fi
 // buildReview yükleyici
 // ---------------------------------------------------------------------------
 
-function isBuildReviewModule(mod: unknown): mod is { buildReview: BuildReviewFn } {
+interface EngineModule {
+  buildReview: BuildReviewFn;
+  buildArtifacts?: BuildArtifactsFn;
+}
+
+function isBuildReviewModule(mod: unknown): mod is EngineModule {
   return typeof mod === 'object' && mod !== null && 'buildReview' in mod && typeof mod.buildReview === 'function';
 }
 
-let defaultBuildReview: Promise<BuildReviewFn> | undefined;
+let defaultEngine: Promise<EngineModule> | undefined;
 
 /** A2'nin motorunu derleme bağımlılığı olmadan yükler (dosya yoksa anlamlı hata). */
 async function loadDefaultBuildReview(): Promise<BuildReviewFn> {
-  defaultBuildReview ??= (async () => {
+  return (await loadEngine()).buildReview;
+}
+
+async function loadDefaultBuildArtifacts(): Promise<BuildArtifactsFn> {
+  const fn = (await loadEngine()).buildArtifacts;
+  if (typeof fn !== 'function') {
+    throw new SourceError('Analiz motoru kod gezinme işlevini (buildArtifacts) dışa açmıyor.', { status: 500, code: 'ENGINE' });
+  }
+  return fn;
+}
+
+async function loadEngine(): Promise<EngineModule> {
+  defaultEngine ??= (async () => {
     const specifier = '../core/buildReview.js';
     let mod: unknown;
     try {
       mod = await import(specifier);
     } catch (err) {
-      defaultBuildReview = undefined;
+      defaultEngine = undefined;
       throw new SourceError('Analiz motoru yüklenemedi (src/core/buildReview).', {
         status: 500,
         code: 'ENGINE',
@@ -280,12 +374,12 @@ async function loadDefaultBuildReview(): Promise<BuildReviewFn> {
       });
     }
     if (!isBuildReviewModule(mod)) {
-      defaultBuildReview = undefined;
+      defaultEngine = undefined;
       throw new SourceError('Analiz motoru beklenen buildReview işlevini dışa açmıyor.', { status: 500, code: 'ENGINE' });
     }
-    return mod.buildReview;
+    return mod;
   })();
-  return await defaultBuildReview;
+  return await defaultEngine;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +423,7 @@ const jsonBodyLimit = bodyLimit({
 export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   const app = new Hono();
   const store = new ReviewStore(opts.maxReviews ?? 20);
+  const navs = new NavigatorCache(Math.max(1, opts.maxNavigationCaches ?? 3));
   const queue = new AnalysisQueue(Math.max(1, opts.maxConcurrentAnalyses ?? 2));
   const jobs = new JobManager({ ttlMs: opts.jobTtlMs, now: opts.now, onProgress: opts.onProgress });
   const tokenEnvNames = opts.tokenEnvNames ?? DEFAULT_TOKEN_ENVS;
@@ -346,10 +441,17 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
       async () => {
         const cs = await makeChangeSet(req, { tokenEnvNames, onProgress: progress });
         let model: ReviewModel;
+        let artifacts: ReviewArtifacts | undefined;
         try {
           const build = opts.buildReview ?? (await loadDefaultBuildReview());
           progress('Analiz başlıyor');
-          model = await build(cs, { id: newReviewId(), onProgress: progress });
+          model = await build(cs, {
+            id: newReviewId(),
+            onProgress: progress,
+            onArtifacts: (a) => {
+              artifacts = a;
+            },
+          });
         } catch (err) {
           void safeDispose(cs);
           throw err;
@@ -362,6 +464,7 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
         const merged = [...cs.warnings, ...(model.warnings ?? [])];
         model.warnings = [...new Set(merged)];
         store.add(model, cs);
+        if (artifacts) navs.set(model.id, new ReviewNavigator(model, artifacts));
         return model;
       },
       (position) => progress(`Kuyrukta bekleniyor (sıra: ${position}; aynı anda en fazla ${opts.maxConcurrentAnalyses ?? 2} analiz)`),
@@ -443,6 +546,7 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   app.delete('/api/reviews/:id', (c) => {
     const id = c.req.param('id');
     if (!store.remove(id)) return apiError(c, 404, REVIEW_NOT_FOUND);
+    navs.delete(id);
     if (initialReviewId === id) initialReviewId = undefined;
     return c.json({ ok: true as const });
   });
@@ -461,6 +565,63 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
     try {
       const content = await lease.cs.readFile(side, path);
       return c.json({ path, side, content: content ?? null });
+    } finally {
+      lease.release();
+    }
+  });
+
+  /** Review'un gezinme nesnesi; bellekte yoksa artefaktlar kiralanan ChangeSet ile yeniden kurulur. */
+  const navigatorFor = async (id: string, lease: ReviewLease): Promise<ReviewNavigator> =>
+    await navs.get(id, async () => {
+      const build = opts.buildArtifacts ?? (await loadDefaultBuildArtifacts());
+      try {
+        const artifacts = await build(lease.cs, { onProgress: (msg) => opts.onProgress?.(`[gezinme ${id}] ${msg}`) });
+        return new ReviewNavigator(lease.model, artifacts);
+      } catch (err) {
+        if (isSourceError(err)) throw err;
+        throw new SourceError('Kod gezinme verisi hazırlanamadı (repo indeksi yeniden kurulamadı).', {
+          status: 500,
+          code: 'ENGINE',
+          detail: shortMessage(err, 200),
+        });
+      }
+    });
+
+  app.get('/api/reviews/:id/outline', async (c) => {
+    const side = c.req.query('side') ?? 'new';
+    if (side !== 'old' && side !== 'new') return apiError(c, 400, "side parametresi 'old' ya da 'new' olmalı.", undefined, 'side');
+    const rawPath = c.req.query('path');
+    if (!rawPath) return apiError(c, 400, 'path parametresi gerekli.', undefined, 'path');
+    const path = sanitizeRepoRelPath(rawPath);
+    if (path === undefined) {
+      return apiError(c, 400, "Geçersiz dosya yolu: depo köküne göre göreli olmalı; '..' ve mutlak yol kullanılamaz.", undefined, 'path');
+    }
+    const id = c.req.param('id');
+    const lease = store.acquire(id);
+    if (!lease) return apiError(c, 404, REVIEW_NOT_FOUND);
+    try {
+      const nav = await navigatorFor(id, lease);
+      const outline = await nav.outline(lease.cs, path, side);
+      if (!outline) {
+        return apiError(c, 404, `Dosya bulunamadı: ${path} (${side === 'old' ? 'eski' : 'yeni'} taraf).`, undefined, 'path');
+      }
+      return c.json(outline);
+    } finally {
+      lease.release();
+    }
+  });
+
+  app.get('/api/reviews/:id/locate', async (c) => {
+    const symbolId = c.req.query('id')?.trim();
+    if (!symbolId) return apiError(c, 400, 'id parametresi gerekli (sembol id).', undefined, 'id');
+    const id = c.req.param('id');
+    const lease = store.acquire(id);
+    if (!lease) return apiError(c, 404, REVIEW_NOT_FOUND);
+    try {
+      const nav = await navigatorFor(id, lease);
+      const loc = nav.locate(symbolId);
+      if (!loc) return apiError(c, 404, `Sembol bulunamadı: ${symbolId}`, undefined, 'id');
+      return c.json(loc);
     } finally {
       lease.release();
     }
