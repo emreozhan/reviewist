@@ -1,5 +1,6 @@
 import type { RiskInfo } from '../../../../src/shared/types';
 import { RiskBadge } from '../../components/RiskBadge';
+import { Section } from '../../components/Section';
 
 /** Risk nedenleri puanlarıyla; çubuk uzunluğu toplam skora katkıyı gösterir. */
 export function RiskReasons({ risk }: { risk: RiskInfo }) {
@@ -7,10 +8,7 @@ export function RiskReasons({ risk }: { risk: RiskInfo }) {
   const sorted = [...risk.reasons].sort((a, b) => b.weight - a.weight);
   const max = Math.max(...sorted.map((r) => r.weight), 1);
   return (
-    <section className="insp__sec" aria-labelledby="risk-title">
-      <h3 id="risk-title" className="insp__h">
-        Risk <RiskBadge level={risk.level} score={risk.score} />
-      </h3>
+    <Section id="insp.risk" title="Risk" extra={<RiskBadge level={risk.level} score={risk.score} />}>
       <ul className="reasons">
         {sorted.map((r, i) => (
           <li key={`${r.code}-${i}`} className="reason" title={r.code}>
@@ -22,6 +20,6 @@ export function RiskReasons({ risk }: { risk: RiskInfo }) {
           </li>
         ))}
       </ul>
-    </section>
+    </Section>
   );
 }

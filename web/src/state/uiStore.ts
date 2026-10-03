@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { GraphFilter } from '../lib/graphLayout';
 import type { FindingFilter, NavFilters } from '../lib/selectors';
 import { DEFAULT_FILTERS, DEFAULT_FINDING_FILTER } from '../lib/selectors';
+import { useLayout } from './layoutStore';
 
 export type CenterView = 'structure' | 'diff';
 export type DiffLayout = 'unified' | 'split';
@@ -27,16 +28,21 @@ interface UiState {
   /** Plan sonundaki katlı özet bölümlerinden açık olanlar ('cosmetic', 'lowrisk'). */
   openFolds: Record<string, boolean>;
   findingFilter: FindingFilter;
-  navCollapsed: boolean;
-  inspectorCollapsed: boolean;
   helpOpen: boolean;
   focusLine: FocusLine | null;
   graphFilter: GraphFilter | null;
   searchFocusTick: number;
+  /**
+   * Her dosya/sembol seçiminde (aynı değer tekrar seçilse de) artar: sekme senkronu gezginden gelen
+   * seçimi önizleme sekmesine çevirmek için bunu izler.
+   */
+  selectionSeq: number;
 
   resetForReview: (reviewId: string) => void;
   selectFile: (fileId: string, opts?: { keepSymbol?: boolean }) => void;
   selectSymbol: (symbolId: string | null, fileId?: string) => void;
+  /** Seçimi temizler (tüm sekmeler kapandığında). */
+  clearSelection: () => void;
   goToLine: (fileId: string, line: number, symbolId?: string) => void;
   /** Satıra gitme isteği işlendi: aynı dosyaya sonra dönülünce eski satıra kaydırılmaz. `tick` verilirse yalnız o istek temizlenir. */
   clearFocus: (tick?: number) => void;
@@ -48,8 +54,6 @@ interface UiState {
   toggleShowUnchanged: () => void;
   toggleFold: (key: string) => void;
   setFindingFilter: (patch: Partial<FindingFilter>) => void;
-  toggleNav: () => void;
-  toggleInspector: () => void;
   setHelpOpen: (open: boolean) => void;
   setGraphFilter: (f: GraphFilter) => void;
   focusSearch: () => void;
@@ -71,12 +75,11 @@ export const useUi = create<UiState>((set, get) => ({
   showUnchanged: false,
   openFolds: {},
   findingFilter: DEFAULT_FINDING_FILTER,
-  navCollapsed: narrow(900),
-  inspectorCollapsed: narrow(1200),
   helpOpen: false,
   focusLine: null,
   graphFilter: null,
   searchFocusTick: 0,
+  selectionSeq: 0,
 
   resetForReview: (reviewId) => {
     if (get().reviewId === reviewId) return;
@@ -89,6 +92,7 @@ export const useUi = create<UiState>((set, get) => ({
       selectedSymbolId: opts?.keepSymbol ? s.selectedSymbolId : null,
       centerView: s.selectedFileId === fileId ? s.centerView : null,
       focusLine: null,
+      selectionSeq: s.selectionSeq + 1,
     })),
   selectSymbol: (symbolId, fileId) =>
     set((s) => {
@@ -98,28 +102,37 @@ export const useUi = create<UiState>((set, get) => ({
         selectedFileId: fileId ?? s.selectedFileId,
         centerView: changingFile ? null : s.centerView,
         focusLine: changingFile ? null : s.focusLine,
+        selectionSeq: s.selectionSeq + 1,
       };
     }),
+  clearSelection: () => set({ selectedFileId: null, selectedSymbolId: null, focusLine: null, centerView: null }),
   goToLine: (fileId, line, symbolId) =>
-    set(() => ({
+    set((s) => ({
       selectedFileId: fileId,
       selectedSymbolId: symbolId ?? null,
       centerView: 'diff',
       focusLine: { fileId, line, tick: ++focusSeq },
+      selectionSeq: s.selectionSeq + 1,
     })),
   clearFocus: (tick) =>
     set((s) => (s.focusLine && (tick === undefined || s.focusLine.tick === tick) ? { focusLine: null } : s)),
   setCenterView: (v) => set({ centerView: v }),
   // Yan yana görünüm geniş alan ister: dar ekranlarda denetçi otomatik daraltılır (tekrar açılabilir).
-  setDiffLayout: (l) => set((s) => ({ diffLayout: l, inspectorCollapsed: l === 'split' && narrow(1600) ? true : s.inspectorCollapsed })),
+  setDiffLayout: (l) => {
+    if (l === 'split' && narrow(1600) && get().diffLayout !== 'split') useLayout.getState().setCollapsed('insp', true);
+    set({ diffLayout: l });
+  },
   setNavMode: (m) => set({ navMode: m }),
   setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
   toggleShowUnchanged: () => set((s) => ({ showUnchanged: !s.showUnchanged })),
   toggleFold: (key) => set((s) => ({ openFolds: { ...s.openFolds, [key]: !s.openFolds[key] } })),
   setFindingFilter: (patch) => set((s) => ({ findingFilter: { ...s.findingFilter, ...patch } })),
-  toggleNav: () => set((s) => ({ navCollapsed: !s.navCollapsed })),
-  toggleInspector: () => set((s) => ({ inspectorCollapsed: !s.inspectorCollapsed })),
   setHelpOpen: (open) => set({ helpOpen: open }),
   setGraphFilter: (f) => set({ graphFilter: f }),
-  focusSearch: () => set((s) => ({ searchFocusTick: s.searchFocusTick + 1, navCollapsed: false })),
+  focusSearch: () => {
+    const layout = useLayout.getState();
+    layout.setCollapsed('nav', false);
+    layout.setFocusMode(false);
+    set((s) => ({ searchFocusTick: s.searchFocusTick + 1 }));
+  },
 }));

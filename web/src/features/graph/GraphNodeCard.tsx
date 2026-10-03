@@ -1,7 +1,7 @@
 import type { ImpactNode } from '../../../../src/shared/types';
 import { RiskBadge } from '../../components/RiskBadge';
 import { StatusGlyph } from '../../components/StatusGlyph';
-import { useOpenLocation } from '../../hooks/useNavigation';
+import { linkProps, useCodeNav } from '../../hooks/useCodeNav';
 import { locateSymbol } from '../../lib/locate';
 import { KIND_LABEL } from '../../lib/labels';
 import { baseName, findAnchor } from '../../lib/reviewIndex';
@@ -17,7 +17,7 @@ interface GraphNodeCardProps {
 /** Seçili graf düğümünün ayrıntısı: diff içindeyse çalışma alanına git, değilse önizleme. */
 export function GraphNodeCard({ node, onClose }: GraphNodeCardProps) {
   const { index } = useReviewCtx();
-  const open = useOpenLocation();
+  const nav = useCodeNav();
   const inDiff = index.symbolFile.has(node.id);
   const anchor = inDiff ? undefined : findAnchor(index, node.id);
   const loc = inDiff ? undefined : locateSymbol(index, node.id);
@@ -41,15 +41,18 @@ export function GraphNodeCard({ node, onClose }: GraphNodeCardProps) {
         </p>
       )}
       {inDiff ? (
-        <button type="button" className="btn btn--primary btn--sm" onClick={() => open({ symbolIds: [node.id] })}>
-          Çalışma alanında aç
+        <button type="button" className="btn btn--primary btn--sm" title="Ctrl+tık: arka plan sekmesi" {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
+          Sekmede aç
         </button>
       ) : (
         <>
           <p className="gcard__note">Bu sembol diff dışında; değişmedi ama değişen koda bağlı.</p>
+          <button type="button" className="btn btn--primary btn--sm" title="Salt okunur kaynak sekmesi (Ctrl+tık: arka planda)" {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
+            Sınıfını sekmede aç
+          </button>
           {loc?.file && <ExternalPreview file={loc.file} line={loc.line} symbolId={node.id} side={loc.side} guessed={loc.guessed} />}
           {anchor && (
-            <button type="button" className="btn btn--sm" onClick={() => open({ symbolIds: [anchor] })}>
+            <button type="button" className="btn btn--sm" {...linkProps((background) => void nav.openSymbol(anchor, { background }))}>
               Etkileyen değişikliğe git
             </button>
           )}

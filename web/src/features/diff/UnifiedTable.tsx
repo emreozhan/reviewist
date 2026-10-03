@@ -5,6 +5,7 @@ import { lineHtml, wordSegmentsForRows } from '../../lib/diffPresentation';
 import { unifiedItems } from '../../lib/diffItems';
 import type { UnifiedItem } from '../../lib/diffItems';
 import type { HlLang } from '../../lib/highlight';
+import type { RefSpan } from '../../lib/refMerge';
 import { BoundaryRow } from './BoundaryRow';
 import { DiffCode } from './DiffCode';
 import { GapCell } from './GapCell';
@@ -33,12 +34,14 @@ export interface DiffTableProps {
   /** Odak satırına kaydırılıp vurgulandıktan sonra çağrılır (istek temizlenir). */
   onFocusDone?: (tick: number) => void;
   label: string;
+  /** Yeni taraf satır no → tıklanabilir referans aralıkları (koddan gezinme). */
+  refSpans?: Map<number, RefSpan[]> | null;
 }
 
 const SIGN = { add: '+', del: '−', context: ' ' } as const;
 const COLS = 5;
 
-export function UnifiedTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label }: DiffTableProps) {
+export function UnifiedTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label, refSpans }: DiffTableProps) {
   const segments = useMemo(() => wordSegmentsForRows(rows), [rows]);
   const items = useMemo(() => unifiedItems(rows, { oldMap, newMap }), [rows, oldMap, newMap]);
   const focusAt = useFocusIndex(items, focus, onFocusMissing);
@@ -65,7 +68,13 @@ export function UnifiedTable({ rows, lang, oldHl, newHl, oldMap, newMap, selecte
           {SIGN[line.type]}
         </td>
         <td className="dl__code">
-          <DiffCode line={line} lang={lang} segments={segments.get(item.rowIndex)} html={lineHtml(line, oldHl, newHl)} />
+          <DiffCode
+            line={line}
+            lang={lang}
+            segments={segments.get(item.rowIndex)}
+            html={lineHtml(line, oldHl, newHl)}
+            refSpans={line.type !== 'del' && line.newNo !== undefined ? refSpans?.get(line.newNo) : undefined}
+          />
         </td>
       </tr>
     );

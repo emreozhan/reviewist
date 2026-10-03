@@ -1,4 +1,7 @@
-/** Basit hash yönlendirmesi: #/ , #/review/:id/:tab?file=..&sym=..&view=..&layout=.. */
+/**
+ * Basit hash yönlendirmesi: #/ , #/review/:id/:tab?file=..&sym=..&view=..&layout=..
+ * Diff dışı (Kaynak görünümlü) etkin sekme: ?src=<yol>&sym=..[&side=old]. Adres yalnız etkin sekmeyi tutar.
+ */
 export type Tab = 'workspace' | 'graph' | 'findings';
 
 export interface RouteParams {
@@ -7,6 +10,10 @@ export interface RouteParams {
   view?: 'structure' | 'diff';
   layout?: 'unified' | 'split';
   line?: number;
+  /** Diff dışı dosyanın yolu (salt okunur Kaynak sekmesi). */
+  src?: string;
+  /** Kaynak sekmesinin tarafı (silinmiş sembolde 'old'). */
+  side?: 'old';
 }
 
 export type Route = { name: 'home' } | { name: 'review'; id: string; tab: Tab; params: RouteParams };
@@ -32,6 +39,9 @@ export function parseHash(hash: string): Route {
   if (layout === 'unified' || layout === 'split') params.layout = layout;
   const line = Number(q.get('line'));
   if (Number.isInteger(line) && line > 0) params.line = line;
+  const src = q.get('src');
+  if (src) params.src = src;
+  if (q.get('side') === 'old') params.side = 'old';
   return { name: 'review', id: segs[1], tab, params };
 }
 
@@ -44,6 +54,8 @@ export function formatHash(route: Route): string {
   if (p.view) q.set('view', p.view);
   if (p.layout) q.set('layout', p.layout);
   if (p.line) q.set('line', String(p.line));
+  if (p.src) q.set('src', p.src);
+  if (p.side) q.set('side', p.side);
   const qs = q.toString();
   return `#/review/${encodeURIComponent(route.id)}/${route.tab}${qs ? `?${qs}` : ''}`;
 }

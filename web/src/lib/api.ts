@@ -1,10 +1,10 @@
-import type { ApiError, AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
+import type { ApiError, AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, LoadProgress, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 import { mockApi } from './mockApi';
 import { yieldToPaint } from './yieldToPaint';
 
-export { ApiRequestError, isApiError, isMissingEndpoint } from './apiTypes';
+export { ApiRequestError, isApiError, isMissingEndpoint, isUnsupportedEndpoint } from './apiTypes';
 export type { ReviewApi, FileSide, FileContentResponse, LoadProgress, ProgressFn } from './apiTypes';
 
 function isApiErrorBody(value: unknown): value is ApiError {
@@ -120,6 +120,10 @@ export const realApi: ReviewApi = {
   getReview: (id, opts) => request<ReviewModel>(`/api/reviews/${encodeURIComponent(id)}`, { signal: opts?.signal }, opts?.onProgress),
   getFile: (id: string, path: string, side: FileSide) =>
     request<FileContentResponse>(`/api/reviews/${encodeURIComponent(id)}/file?path=${encodeURIComponent(path)}&side=${side}`),
+  getOutline: (id: string, path: string, side: FileSide, signal?: AbortSignal) =>
+    request<FileOutline>(`/api/reviews/${encodeURIComponent(id)}/outline?path=${encodeURIComponent(path)}&side=${side}`, { signal }),
+  locate: (id: string, symbolId: string, signal?: AbortSignal) =>
+    request<SymbolLocation>(`/api/reviews/${encodeURIComponent(id)}/locate?id=${encodeURIComponent(symbolId)}`, { signal }),
 };
 
 export function getApi(mock: boolean): ReviewApi {

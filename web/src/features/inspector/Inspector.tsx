@@ -1,31 +1,38 @@
-import { Icon } from '../../components/Icon';
+import { PanelTools } from '../../components/PanelTools';
+import { activeTab } from '../../lib/tabs';
+import { useTabs } from '../../state/tabsStore';
 import { useUi } from '../../state/uiStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { FileInspector } from './FileInspector';
+import { SourceInspector } from './SourceInspector';
 import { SymbolInspector } from './SymbolInspector';
 
-export function Inspector({ onCollapse }: { onCollapse: () => void }) {
+export function Inspector() {
   const { index } = useReviewCtx();
   const symbolId = useUi((s) => s.selectedSymbolId);
   const fileId = useUi((s) => s.selectedFileId);
   const selectSymbol = useUi((s) => s.selectSymbol);
+  const outside = useTabs((s) => {
+    const t = activeTab(s);
+    return t && !t.inDiff ? t : undefined;
+  });
   const file = fileId ? index.fileById.get(fileId) : undefined;
 
   return (
     <div className="insp">
       <div className="panel-head">
         <span className="panel-head__title">Denetçi</span>
-        {symbolId && (
+        {symbolId && !outside && (
           <button type="button" className="link-btn" onClick={() => selectSymbol(null)}>
             dosyaya dön
           </button>
         )}
-        <button type="button" className="icon-btn icon-btn--sm" onClick={onCollapse} aria-label="Denetçiyi daralt" title="Denetçiyi daralt">
-          <Icon name="chevronRight" />
-        </button>
+        <PanelTools panel="insp" />
       </div>
       <div className="insp__scroll">
-        {symbolId ? (
+        {outside ? (
+          <SourceInspector key={`${outside.key}|${outside.symbolId ?? ''}`} tab={outside} />
+        ) : symbolId ? (
           <SymbolInspector key={symbolId} symbolId={symbolId} />
         ) : file ? (
           <FileInspector key={file.id} file={file} />

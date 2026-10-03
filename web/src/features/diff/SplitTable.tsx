@@ -13,7 +13,7 @@ import { useRowWindow } from './useRowWindow';
 const COLS = 5;
 
 /** Yan yana diff: sol eski, sağ yeni. Uzun dosyalarda yalnız görünen satırlar çizilir. */
-export function SplitTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label }: DiffTableProps) {
+export function SplitTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedSymbolId, onSelectSymbol, onExpand, focus, onFocusMissing, onFocusDone, label, refSpans }: DiffTableProps) {
   const split = useMemo(() => toSplitRows(rows), [rows]);
   const items = useMemo(() => splitItems(split, { oldMap, newMap }), [split, oldMap, newMap]);
   const focusAt = useFocusIndex(items, focus, onFocusMissing);
@@ -35,7 +35,14 @@ export function SplitTable({ rows, lang, oldHl, newHl, oldMap, newMap, selectedS
       >
         <td className={`dl__rail${mark ? ` st-line--${mark.status}` : ''}`} aria-hidden="true" />
         <SplitSideCells side={row.left} which="old" lang={lang} oldHl={oldHl} newHl={newHl} />
-        <SplitSideCells side={row.right} which="new" lang={lang} oldHl={oldHl} newHl={newHl} />
+        <SplitSideCells
+          side={row.right}
+          which="new"
+          lang={lang}
+          oldHl={oldHl}
+          newHl={newHl}
+          refSpans={row.right?.line.newNo !== undefined ? refSpans?.get(row.right.line.newNo) : undefined}
+        />
       </tr>
     );
   };

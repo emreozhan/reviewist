@@ -1,4 +1,4 @@
-import type { AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
+import type { AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 
 export type FileSide = 'old' | 'new';
 
@@ -38,6 +38,10 @@ export interface ReviewApi {
   /** Büyük model (onlarca MB) indirilirken `onProgress` ile ilerleme bildirilir. */
   getReview(id: string, opts?: LoadOptions): Promise<ReviewModel>;
   getFile(id: string, path: string, side: FileSide): Promise<FileContentResponse>;
+  /** (Tur 4) Dosyanın sembol ana hattı ve tıklanabilir referansları. Uç yoksa gövdesiz 404/405. */
+  getOutline(id: string, path: string, side: FileSide, signal?: AbortSignal): Promise<FileOutline>;
+  /** (Tur 4) Herhangi bir sembolün konumu; bulunamazsa 404 (ApiError gövdeli). */
+  locate(id: string, symbolId: string, signal?: AbortSignal): Promise<SymbolLocation>;
 }
 
 /** `analysis`: iş sunucuda hata durumuyla bitti (job.error). */
@@ -76,4 +80,16 @@ export function isApiError(error: unknown): error is ApiRequestError {
 /** Sunucu bu ucu hiç tanımıyor mu (eski sürüm): gövdesiz 404/405. */
 export function isMissingEndpoint(error: unknown): boolean {
   return isApiError(error) && error.kind === 'http' && (error.status === 404 || error.status === 405) && !error.fromServerBody;
+}
+
+/** Sunucunun bilinmeyen API yolu için döndürdüğü mesaj (gövdeli 404). */
+const UNKNOWN_ROUTE_MESSAGE = 'API uç noktası bulunamadı.';
+
+/**
+ * Kod gezinme uçları (outline/locate) bu sunucuda yok mu: gövdesiz 404/405 ya da sunucunun
+ * "API uç noktası bulunamadı" yanıtı. (Uç varken dönen "dosya/sembol bulunamadı" 404'ü bu değildir.)
+ */
+export function isUnsupportedEndpoint(error: unknown): boolean {
+  if (isMissingEndpoint(error)) return true;
+  return isApiError(error) && error.kind === 'http' && (error.status === 404 || error.status === 405) && error.message === UNKNOWN_ROUTE_MESSAGE;
 }

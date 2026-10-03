@@ -1,4 +1,4 @@
-import { Icon } from '../../components/Icon';
+import { PanelTools } from '../../components/PanelTools';
 import { Segmented } from '../../components/Segmented';
 import type { NavMode } from '../../state/uiStore';
 import { useUi } from '../../state/uiStore';
@@ -9,7 +9,7 @@ import { LayerTree } from './LayerTree';
 import { NavFilters } from './NavFilters';
 import { PlanList } from './PlanList';
 
-export function Navigator({ onCollapse }: { onCollapse: () => void }) {
+export function Navigator() {
   const { index } = useReviewCtx();
   const counts = index.findingCounts.total;
   const mode = useUi((s) => s.navMode);
@@ -19,9 +19,7 @@ export function Navigator({ onCollapse }: { onCollapse: () => void }) {
     <div className="nav">
       <div className="panel-head">
         <span className="panel-head__title">Gezgin</span>
-        <button type="button" className="icon-btn icon-btn--sm" onClick={onCollapse} aria-label="Gezgini daralt" title="Gezgini daralt">
-          <Icon name="chevronLeft" />
-        </button>
+        <PanelTools panel="nav" />
       </div>
       <div className="nav__modes">
         <Segmented<NavMode>

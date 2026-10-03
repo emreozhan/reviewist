@@ -48,7 +48,6 @@ export function MemberRow({ member, file }: MemberRowProps) {
             {member.oldName && member.oldName !== member.name && <span className="member__was">eski adı: {member.oldName}</span>}
             {movedTo && <span className="member__was">→ {symbolLabel(index, movedTo.id)}</span>}
             {lines && <span className="member__loc gauge">satır {lines.startLine}–{lines.endLine}</span>}
-            <PropagationBadges member={member} />
           </span>
         )}
         {member.details.length > 0 && member.status !== 'unchanged' && (
@@ -61,6 +60,11 @@ export function MemberRow({ member, file }: MemberRowProps) {
           </span>
         )}
       </button>
+      {member.status !== 'unchanged' && (
+        <div className="member__prop">
+          <PropagationBadges member={member} />
+        </div>
+      )}
       {selected && member.status !== 'unchanged' && <MemberDiff file={file} member={member} />}
     </div>
   );

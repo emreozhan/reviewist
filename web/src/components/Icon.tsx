@@ -25,6 +25,13 @@ const PATHS = {
   expand: 'M8 2v4M8 10v4M5 4l3-2 3 2M5 12l3 2 3-2',
   note: 'M3 2h7l3 3v9H3zM10 2v3h3M5 8h6M5 11h4',
   warning: 'M8 2l6.5 11.5h-13zM8 6.5v3.5M8 11.8v.4',
+  grow: 'M1.5 8h13M4.5 5l-3 3 3 3M11.5 5l3 3-3 3',
+  shrink: 'M1 8h4.5M10.5 8H15M3.5 5l2.5 3-2.5 3M12.5 5L10 8l2.5 3',
+  focus: 'M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4',
+  arrowLeft: 'M13 8H3M7 4L3 8l4 4',
+  arrowRight: 'M3 8h10M9 4l4 4-4 4',
+  tabs: 'M2 5h12v9H2zM2 5V2.5h5V5',
+  outline: 'M3 3h10M5.5 6.5H13M5.5 10H13M3 13.5h10',
 } as const;
 
 export type IconName = keyof typeof PATHS;

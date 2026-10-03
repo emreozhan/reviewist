@@ -2,7 +2,8 @@ import { useMemo } from 'react';
 import type { FileChange, TypeChange } from '../../../../src/shared/types';
 import { VirtualList } from '../../components/VirtualList';
 import type { StructureRow } from '../../lib/structureRows';
-import { structureKeyOf, structureRows } from '../../lib/structureRows';
+import { structureKeyOf, structureRows, typeFoldKey } from '../../lib/structureRows';
+import { useLayout } from '../../state/layoutStore';
 import { useUi } from '../../state/uiStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { MemberRow } from './MemberRow';
@@ -27,7 +28,9 @@ export function StructureView({ file }: { file: FileChange }) {
   const toggleUnchanged = useUi((s) => s.toggleShowUnchanged);
   const selected = useUi((s) => s.selectedSymbolId);
   const types = useMemo(() => file.typeIds.map((id) => index.typeById.get(id)).filter((t): t is TypeChange => !!t), [file, index]);
-  const rows = useMemo(() => structureRows(types, showUnchanged), [types, showUnchanged]);
+  const closed = useLayout((s) => s.closed);
+  const foldSig = types.filter((t) => closed[typeFoldKey(t.id)]).map((t) => t.id).join('|');
+  const rows = useMemo(() => structureRows(types, showUnchanged, new Set(foldSig ? foldSig.split('|') : [])), [types, showUnchanged, foldSig]);
   const activeKey = structureKeyOf(selected, !!selected && index.memberById.has(selected));
 
   if (types.length === 0) {

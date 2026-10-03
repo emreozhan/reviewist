@@ -6,6 +6,7 @@ import { buildSymbolMap } from '../../lib/diffPresentation';
 import { buildDiffRows } from '../../lib/diffRows';
 import { langFor } from '../../lib/highlight';
 import { useUi } from '../../state/uiStore';
+import { useCodeRefs } from '../codenav/useCodeRefs';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { SplitTable } from './SplitTable';
 import { UnifiedTable } from './UnifiedTable';
@@ -24,6 +25,8 @@ export function DiffView({ file }: { file: FileChange }) {
   const newQ = useFileContent(review.id, file.status === 'deleted' ? undefined : file.path, 'new');
   const oldQ = useFileContent(review.id, file.status === 'added' ? undefined : (file.oldPath ?? file.path), 'old');
   const lang = langFor(file.language);
+  // Koddan gezinme: yeni taraftaki referanslar (outline ucu yoksa kapalı).
+  const refs = useCodeRefs(file.status === 'deleted' ? undefined : file.path, 'new', file.language === 'java' && !file.binary);
   const newHl = useHighlighted(newQ.content, lang);
   const oldHl = useHighlighted(oldQ.content, lang);
 
@@ -60,6 +63,7 @@ export function DiffView({ file }: { file: FileChange }) {
     onFocusMissing,
     onFocusDone: clearFocus,
     label: `${file.path} farkı`,
+    refSpans: refs.spans,
   };
 
   return (
@@ -68,6 +72,7 @@ export function DiffView({ file }: { file: FileChange }) {
         {file.hunks.length === 0 && <span className="muted">İçerik farkı yok (yalnızca yeniden adlandırma veya kip değişikliği).</span>}
         {contentMissing && <span className="muted">Tam dosya içeriği alınamadı; yalnız hunk'lar gösteriliyor.</span>}
         {newQ.isFetching && <span className="muted">İçerik yükleniyor…</span>}
+        {refs.loading && <span className="muted">Kod bağlantıları yükleniyor…</span>}
         <span className="diffview__spacer" />
         {(hasGaps || expandAll) && (
           <button type="button" className="btn btn--sm btn--ghost" onClick={() => setExpandAll((v) => !v)} aria-pressed={expandAll}>
@@ -75,7 +80,10 @@ export function DiffView({ file }: { file: FileChange }) {
           </button>
         )}
       </div>
-      <div className="code-surface">{layout === 'split' ? <SplitTable {...props} /> : <UnifiedTable {...props} />}</div>
+      <div className={`code-surface${refs.spans ? ' has-refs' : ''}`} {...refs.handlers}>
+        {layout === 'split' ? <SplitTable {...props} /> : <UnifiedTable {...props} />}
+      </div>
+      {refs.menu}
     </div>
   );
 }

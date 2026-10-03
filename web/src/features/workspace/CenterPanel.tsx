@@ -1,16 +1,22 @@
 import { useEffect, useRef } from 'react';
+import { activeTab } from '../../lib/tabs';
+import { useTabs } from '../../state/tabsStore';
 import { useUi } from '../../state/uiStore';
+import { SourceTab } from '../codeview/SourceTab';
 import { DiffView } from '../diff/DiffView';
 import { StructureView } from '../structure/StructureView';
+import { HistoryTrail } from '../tabs/HistoryTrail';
+import { TabBar } from '../tabs/TabBar';
+import { tabDomId } from '../tabs/TabItem';
 import { FileHeader } from './FileHeader';
 import { useReviewCtx } from './ReviewContext';
 
-export function CenterPanel() {
+/** Diff içindeki dosya: mevcut Yapı / Diff görünümleri. */
+function DiffFilePanel({ fileId }: { fileId: string }) {
   const { index } = useReviewCtx();
-  const fileId = useUi((s) => s.selectedFileId);
   const centerView = useUi((s) => s.centerView);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const file = fileId ? index.fileById.get(fileId) : undefined;
+  const file = index.fileById.get(fileId);
 
   useEffect(() => {
     // Satıra gitme isteği varsa kaydırmayı diff tablosu yapar; burada başa sarmak onu ezer.
@@ -19,22 +25,12 @@ export function CenterPanel() {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [fileId]);
 
-  if (!file) {
-    return (
-      <div className="center-empty">
-        <p className="center-empty__title">Bir dosya seçin</p>
-        <p className="muted">
-          Okuma planından başlayın ya da <kbd>j</kbd> / <kbd>k</kbd> ile gezinin.
-        </p>
-      </div>
-    );
-  }
-
+  if (!file) return <p className="center__note">Dosya bu review'da bulunamadı: {fileId}</p>;
   const hasStructure = file.language === 'java' && file.typeIds.length > 0 && !file.binary;
   const view = hasStructure ? (centerView ?? 'structure') : 'diff';
 
   return (
-    <div className="center">
+    <div className="center__file">
       <FileHeader file={file} view={view} hasStructure={hasStructure} />
       <div className="center__scroll" ref={scrollRef}>
         {file.binary ? (
@@ -43,6 +39,33 @@ export function CenterPanel() {
           <StructureView key={file.id} file={file} />
         ) : (
           <DiffView key={file.id} file={file} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Orta panel: sekme çubuğu + gezinme izi + etkin sekmenin içeriği (diff içi: Yapı/Diff, diff dışı: Kaynak). */
+export function CenterPanel() {
+  const active = useTabs((s) => activeTab(s));
+  const activeIndex = useTabs((s) => s.tabs.findIndex((t) => t.key === s.activeKey));
+
+  return (
+    <div className="center">
+      <TabBar />
+      <HistoryTrail />
+      <div className="center__panel" role="tabpanel" id="center-tabpanel" aria-labelledby={activeIndex >= 0 ? tabDomId(activeIndex) : undefined}>
+        {!active ? (
+          <div className="center-empty">
+            <p className="center-empty__title">Bir dosya seçin</p>
+            <p className="muted">
+              Okuma planından başlayın ya da <kbd>j</kbd> / <kbd>k</kbd> ile gezinin. Bir metoda tıklamak sınıfını yeni sekmede açar.
+            </p>
+          </div>
+        ) : active.inDiff ? (
+          <DiffFilePanel fileId={active.path} />
+        ) : (
+          <SourceTab key={active.key} tab={active} />
         )}
       </div>
     </div>

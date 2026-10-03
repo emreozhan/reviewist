@@ -1,4 +1,5 @@
 import type { FileChange } from '../../../../src/shared/types';
+import { Section } from '../../components/Section';
 import { StatusGlyph } from '../../components/StatusGlyph';
 import { fileNoteKey } from '../../lib/persistence';
 import { baseName } from '../../lib/reviewIndex';
@@ -25,8 +26,7 @@ export function FileInspector({ file }: { file: FileChange }) {
       </header>
 
       {types.length > 0 && (
-        <section className="insp__sec">
-          <h3 className="insp__h">Tipler</h3>
+        <Section id="insp.types" title="Tipler">
           <ul className="insp__types">
             {types.map((t) => (
               <li key={t.id}>
@@ -38,13 +38,12 @@ export function FileInspector({ file }: { file: FileChange }) {
               </li>
             ))}
           </ul>
-        </section>
+        </Section>
       )}
 
       <RiskReasons risk={file.risk} />
 
-      <section className="insp__sec">
-        <h3 className="insp__h">İlgili testler</h3>
+      <Section id="insp.tests" title="İlgili testler">
         {file.isTest ? (
           <p className="muted">Bu bir test dosyası.</p>
         ) : file.relatedTestFiles.length === 0 ? (
@@ -59,17 +58,16 @@ export function FileInspector({ file }: { file: FileChange }) {
             ))}
           </ul>
         )}
-      </section>
+      </Section>
 
       {findings.length > 0 && (
-        <section className="insp__sec">
-          <h3 className="insp__h">Bulgular</h3>
+        <Section id="insp.findings" title="Bulgular" resizable resizeLabel="Bulgular bölümü yüksekliği" extra={<span className="gauge prop-tree__count">{findings.length}</span>}>
           <div className="insp__findings">
             {findings.map((f) => (
               <FindingCard key={f.id} finding={f} />
             ))}
           </div>
-        </section>
+        </Section>
       )}
       <NoteEditor noteKey={fileNoteKey(file.path)} label="Dosya notu" />
     </div>

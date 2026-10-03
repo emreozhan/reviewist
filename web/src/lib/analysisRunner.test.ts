@@ -25,6 +25,8 @@ function fakeApi(overrides: Partial<ReviewApi>): ReviewApi {
     listReviews: fail,
     getReview: fail,
     getFile: fail,
+    getOutline: fail,
+    locate: fail,
     ...overrides,
   };
 }

@@ -4,6 +4,7 @@ import { FileStatusIcon } from '../../components/FileStatusIcon';
 import { RiskBadge } from '../../components/RiskBadge';
 import { baseName, compactDir } from '../../lib/reviewIndex';
 import { useProgress } from '../../state/progressStore';
+import { useTabs } from '../../state/tabsStore';
 import { useUi } from '../../state/uiStore';
 
 interface FileRowProps {
@@ -29,7 +30,10 @@ export function FileRow({ file, order, compact = false }: FileRowProps) {
         aria-label={`${baseName(file.path)} görüldü`}
         title="Görüldü (v)"
       />
-      <button type="button" className="frow__btn" onClick={() => selectFile(file.id)} aria-current={selected ? 'true' : undefined} title={file.path}>
+      <button type="button" className="frow__btn" onClick={() => selectFile(file.id)}
+        onDoubleClick={() => useTabs.getState().pinPath(file.id)}
+        aria-current={selected ? 'true' : undefined} title={`${file.path}
+Tık: önizleme sekmesi · çift tık: kalıcı sekme`}>
         {order !== undefined && <span className="frow__order gauge">{String(order).padStart(2, '0')}</span>}
         <FileStatusIcon status={file.status} />
         <span className="frow__name">

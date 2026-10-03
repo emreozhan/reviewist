@@ -1,5 +1,6 @@
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow } from '@xyflow/react';
 import type { NodeMouseHandler } from '@xyflow/react';
+import { useCodeNav } from '../../hooks/useCodeNav';
 import { useMemo, useState } from 'react';
 import { defaultGraphFilter, selectSubgraph } from '../../lib/graphLayout';
 import { useTheme } from '../../state/theme';
@@ -33,7 +34,16 @@ export function ImpactMap() {
   // Filtre ya da düğüm kümesi değişince yeniden sığdır (seçim değişimi sığdırmayı tetiklemez).
   const fitSignature = useMemo(() => `${JSON.stringify(filter)}|${sub.nodes.length}|${sub.edges.length}`, [filter, sub]);
 
-  const onNodeClick: NodeMouseHandler<ImpactFlowNode> = (_e, node) => setSelectedId((cur) => (cur === node.id ? null : node.id));
+  const nav = useCodeNav();
+  // Tık: ayrıntı kartı; çift tık: sınıfı sekmede öne gelir; Ctrl/Cmd+tık: arka plan sekmesi.
+  const onNodeClick: NodeMouseHandler<ImpactFlowNode> = (e, node) => {
+    if (e.ctrlKey || e.metaKey) {
+      void nav.openSymbol(node.id, { background: true });
+      return;
+    }
+    setSelectedId((cur) => (cur === node.id ? null : node.id));
+  };
+  const onNodeDoubleClick: NodeMouseHandler<ImpactFlowNode> = (_e, node) => void nav.openSymbol(node.id);
 
   return (
     <div className="gmap">
@@ -47,6 +57,8 @@ export function ImpactMap() {
             edges={flow.edges}
             nodeTypes={NODE_TYPES}
             onNodeClick={onNodeClick}
+            onNodeDoubleClick={onNodeDoubleClick}
+            zoomOnDoubleClick={false}
             onPaneClick={() => setSelectedId(null)}
             nodesDraggable={false}
             nodesConnectable={false}

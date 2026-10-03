@@ -1,3 +1,4 @@
+import { Section } from '../../components/Section';
 import { SignatureDiff } from '../../components/SignatureDiff';
 import { StatusGlyph } from '../../components/StatusGlyph';
 import { FLAG_LABEL, KIND_LABEL, STATUS_META } from '../../lib/labels';
@@ -52,15 +53,13 @@ export function SymbolInspector({ symbolId }: { symbolId: string }) {
       </header>
 
       {signature && (
-        <section className="insp__sec">
-          <h3 className="insp__h">İmza</h3>
+        <Section id="insp.signature" title="İmza">
           <SignatureDiff signature={signature} oldSignature={member?.oldSignature} stacked />
-        </section>
+        </Section>
       )}
 
       {(subject.details.length > 0 || subject.flags.length > 0) && (
-        <section className="insp__sec">
-          <h3 className="insp__h">Ne değişti</h3>
+        <Section id="insp.changes" title="Ne değişti">
           {subject.flags.length > 0 && (
             <p className="insp__flags">
               {subject.flags.map((f) => (
@@ -76,21 +75,20 @@ export function SymbolInspector({ symbolId }: { symbolId: string }) {
             ))}
           </ul>
           {subject.status === 'unchanged' && <p className="muted">{STATUS_META.unchanged.label}.</p>}
-        </section>
+        </Section>
       )}
 
       <RiskReasons risk={subject.risk} />
       <PropagationTree symbolId={symbolId} />
 
       {findings.length > 0 && (
-        <section className="insp__sec">
-          <h3 className="insp__h">Bu sembolle ilgili bulgular</h3>
+        <Section id="insp.findings" title="Bu sembolle ilgili bulgular" resizable resizeLabel="Bulgular bölümü yüksekliği" extra={<span className="gauge prop-tree__count">{findings.length}</span>}>
           <div className="insp__findings">
             {findings.map((f) => (
               <FindingCard key={f.id} finding={f} />
             ))}
           </div>
-        </section>
+        </Section>
       )}
 
       <NoteEditor noteKey={symbolNoteKey(symbolId)} label="Sembol notu" />

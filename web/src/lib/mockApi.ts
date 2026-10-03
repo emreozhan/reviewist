@@ -1,4 +1,4 @@
-import type { AppConfig, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest } from '../../../src/shared/types';
+import type { AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, LoadOptions, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 
@@ -166,5 +166,19 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
     await delay(90);
     const { sampleFiles } = await sample();
     return { path, side, content: sampleFiles[path]?.[side] ?? null };
+  },
+  async getOutline(_id: string, path: string, side: FileSide, signal?: AbortSignal): Promise<FileOutline> {
+    await delay(70, signal);
+    const { mockOutline } = await import('../mock/outline');
+    const outline = mockOutline(path, side);
+    if (!outline) throw new ApiRequestError(`Dosya bulunamadı: ${path}`, { kind: 'http', status: 404, endpoint: `mock:/outline?path=${path}`, fromServerBody: true });
+    return outline;
+  },
+  async locate(_id: string, symbolId: string, signal?: AbortSignal): Promise<SymbolLocation> {
+    await delay(50, signal);
+    const { mockLocate } = await import('../mock/outline');
+    const loc = mockLocate(symbolId);
+    if (!loc) throw new ApiRequestError(`Sembol bulunamadı: ${symbolId}`, { kind: 'http', status: 404, endpoint: `mock:/locate?id=${symbolId}`, fromServerBody: true });
+    return loc;
   },
 };
