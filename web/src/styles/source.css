@@ -220,106 +220,6 @@
 }
 
 /* Combobox */
-.combo {
-  position: relative;
-}
-
-.combo__list {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  z-index: 40;
-  max-height: 300px;
-  margin: 0;
-  padding: 4px;
-  overflow: auto;
-  list-style: none;
-  border-radius: var(--r-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-pop);
-}
-
-.combo__opt {
-  display: grid;
-  gap: 1px;
-  padding: 5px 8px;
-  border-radius: var(--r-sm);
-  cursor: pointer;
-}
-
-.combo__opt[data-group]::before {
-  content: attr(data-group);
-  display: block;
-  margin: 6px -4px 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--line);
-  color: var(--text-faint);
-  font-family: var(--font-gauge);
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-.combo__opt:first-child[data-group]::before {
-  margin-top: 0;
-  border-top: 0;
-}
-
-.combo__opt.is-active {
-  background: var(--surface-3);
-}
-
-.combo__label {
-  overflow: hidden;
-  font-family: var(--font-code);
-  font-size: var(--fs-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.combo__meta {
-  color: var(--text-faint);
-  font-size: var(--fs-xxs);
-}
-
-.combo__input {
-  padding-right: 30px;
-}
-
-.combo__toggle {
-  position: absolute;
-  top: 1px;
-  right: 1px;
-  bottom: 1px;
-  width: 28px;
-  border: 0;
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  background: transparent;
-  color: var(--text-faint);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.combo__toggle:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--surface-3);
-}
-
-.combo__toggle:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-
-.combo__opt.is-current .combo__label {
-  color: var(--accent);
-}
-
-.combo__empty {
-  padding: 8px 10px;
-  color: var(--text-faint);
-  font-size: var(--fs-xs);
-}
 
 /* Analiz ilerleme */
 .analysis {
@@ -575,4 +475,189 @@
   justify-items: start;
   gap: 8px;
   padding: 10px 0 4px;
+}
+
+/* Ref seçici (dal combobox'ı): seçili ref'i gösteren düğme + aranabilir açılır liste */
+.refsel {
+  position: relative;
+}
+
+.refsel__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.refsel.is-open .refsel__trigger {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.refsel__icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+}
+
+.refsel__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refsel__value.is-placeholder {
+  color: var(--text-faint);
+  font-family: inherit;
+}
+
+.refsel__kind {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--text-faint);
+  font-size: var(--fs-xxs);
+}
+
+.refsel__chevron {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-faint);
+  transition: transform 120ms;
+}
+
+.refsel.is-open .refsel__chevron {
+  transform: rotate(180deg);
+}
+
+.refsel__pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 40;
+  width: max(100%, 320px);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.refsel__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.refsel__search-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--text-faint);
+}
+
+.refsel__search-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+}
+
+.refsel__list {
+  max-height: 320px;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  list-style: none;
+}
+
+.refsel__opt {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 6px;
+  align-items: center;
+  padding: 5px 8px 5px 4px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.refsel__opt[data-group]::before {
+  content: attr(data-group);
+  grid-column: 1 / -1;
+  margin: 6px -4px 4px 0;
+  padding: 4px 0 0 4px;
+  border-top: 1px solid var(--line);
+  color: var(--text-faint);
+  font-family: var(--font-gauge);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.refsel__opt:first-child[data-group]::before {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.refsel__opt.is-active {
+  background: var(--surface-3);
+}
+
+.refsel__check {
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+
+.refsel__check svg {
+  width: 12px;
+  height: 12px;
+}
+
+.refsel__opt-label {
+  overflow: hidden;
+  font-family: var(--font-code);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refsel__opt.is-current .refsel__opt-label {
+  color: var(--accent);
+}
+
+.refsel__opt-meta {
+  grid-column: 2;
+  color: var(--text-faint);
+  font-size: var(--fs-xxs);
+}
+
+.refsel__opt.is-empty .refsel__opt-label {
+  font-family: inherit;
+  color: var(--text-muted, var(--text-faint));
+}
+
+.refsel__opt.is-custom {
+  border-bottom: 1px dashed var(--line);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+}
+
+.refsel__empty {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
 }

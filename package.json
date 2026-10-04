@@ -17,7 +17,8 @@
     "fixture": "node scripts/make-fixture.mjs",
     "build:server": "tsc -p tsconfig.json",
     "test:server": "vitest run src/sources src/server",
-    "test:core": "vitest run src/core"
+    "test:core": "vitest run src/core",
+    "test:perf": "vitest run src/core/java/perf.test.ts src/core/perf.test.ts --no-file-parallelism"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.3",

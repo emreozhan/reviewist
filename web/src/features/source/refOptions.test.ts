@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GitRefs } from '../../../../src/shared/types';
-import { buildRefOptions, filterRefOptions, isKnownRef, suggestHead } from './refOptions';
+import { buildRefOptions, buildRefRows, describeRef, filterRefOptions, isKnownRef, suggestHead } from './refOptions';
 
 const refs: GitRefs = {
   repoPath: 'C:/repo',
@@ -45,5 +45,31 @@ describe('filterRefOptions', () => {
 
   it('yazılan metinle süzer', () => {
     expect(filterRefOptions(buildRefOptions(refs), 'feat').map((o) => o.value)).toEqual(['feature/ai-refactor', 'feature/small-fix']);
+  });
+});
+
+describe('buildRefRows', () => {
+  it('sorgu yokken boşaltma seçeneği ve tüm refler', () => {
+    const rows = buildRefRows(refs, '', 'HEAD (varsayılan)');
+    expect(rows[0]).toMatchObject({ special: 'empty', value: '' });
+    expect(rows.filter((r) => !r.special).map((r) => r.value)).toContain('feature/ai-refactor');
+  });
+
+  it('birebir eşleşme yoksa yazılanı olduğu gibi kullan satırı başa gelir', () => {
+    const rows = buildRefRows(refs, 'HEAD~3');
+    expect(rows[0]).toMatchObject({ special: 'custom', value: 'HEAD~3' });
+  });
+
+  it('birebir eşleşmede serbest satır eklenmez', () => {
+    expect(buildRefRows(refs, 'main').some((r) => r.special === 'custom')).toBe(false);
+  });
+});
+
+describe('describeRef', () => {
+  it('ref türünü ve commit konusunu bulur', () => {
+    expect(describeRef(refs, 'main')).toEqual({ kind: 'branch', label: 'main' });
+    expect(describeRef(refs, 'v1.0').kind).toBe('tag');
+    expect(describeRef(refs, '08c678d')).toEqual({ kind: 'commit', label: '08c678d İlk' });
+    expect(describeRef(refs, 'HEAD~2').kind).toBe('custom');
   });
 });

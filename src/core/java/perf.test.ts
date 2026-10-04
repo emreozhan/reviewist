@@ -74,7 +74,9 @@ describe('performans', () => {
     expect(models.every((m) => !m.hasErrors)).toBe(true);
     expect(changed).toBe(300);
     expect(idx.callersOf('com.acme.m1.Service1#op1(int,List)').length).toBeGreaterThan(0);
-    expect(t3 - t0).toBeLessThan(20_000);
+    // Mutlak süre sınırı yalnız `npm run test:perf` (tek başına, REVIEWIST_PERF=1) ile uygulanır;
+    // tam test seti paralel koşarken CPU paylaşıldığı için bu sınır kararsız olur.
+    if (process.env.REVIEWIST_PERF === '1' || process.env.npm_lifecycle_event === 'test:perf') expect(t3 - t0).toBeLessThan(20_000);
   });
 });
 

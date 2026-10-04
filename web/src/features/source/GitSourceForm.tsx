@@ -4,7 +4,7 @@ import type { AppConfig, ReviewRequest } from '../../../../src/shared/types';
 import { Field } from '../../components/Field';
 import { Switch } from '../../components/Switch';
 import { useRefs } from '../../hooks/queries';
-import { RefCombobox } from './RefCombobox';
+import { RefSelect } from './RefSelect';
 import { isKnownRef, suggestHead } from './refOptions';
 import { RepoPathField } from './RepoPathField';
 import type { ServerFieldError } from './serverFieldError';
@@ -65,11 +65,11 @@ export function GitSourceForm({ config, pending, onSubmit, serverError, onEdit }
       <RepoPathField id="git-repo" value={repoPath} onChange={setRepoPath} onCommit={(v) => setCommitted(v.trim())} onPicked={() => { setErrors(({ repoPath: _picked, ...rest }) => rest); onEdit?.(); }} refsQuery={committed ? refs : undefined} error={errors.repoPath} />
       <div className="source-form__row">
         <Field id="git-base" label="Taban (base)" error={errors.base} hint="Dal, etiket ya da commit">
-          <RefCombobox id="git-base" value={base} onChange={setBase} refs={refs.data} placeholder="main" invalid={!!errors.base} describedBy={errors.base ? 'git-base-error' : 'git-base-hint'} />
+          <RefSelect id="git-base" value={base} onChange={(v) => { setBase(v); onEdit?.(); }} refs={refs.data} loading={refs.isFetching} placeholder="Taban dalı seçin" invalid={!!errors.base} describedBy={errors.base ? 'git-base-error' : 'git-base-hint'} />
         </Field>
         <span className="source-form__arrow" aria-hidden="true">→</span>
         <Field id="git-head" label="İncelenecek (head)" error={errors.head} hint="Değişiklikleri içeren ref">
-          <RefCombobox id="git-head" value={head} onChange={setHead} refs={refs.data} placeholder="feature/…" invalid={!!errors.head} describedBy={errors.head ? 'git-head-error' : 'git-head-hint'} />
+          <RefSelect id="git-head" value={head} onChange={(v) => { setHead(v); onEdit?.(); }} refs={refs.data} loading={refs.isFetching} placeholder="İncelenecek dalı seçin" invalid={!!errors.head} describedBy={errors.head ? 'git-head-error' : 'git-head-hint'} />
         </Field>
       </div>
       <Switch
