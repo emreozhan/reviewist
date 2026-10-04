@@ -1,4 +1,4 @@
-import type { ApiError, AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
+import type { ApiError, AppConfig, FileOutline, FsListing, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, LoadProgress, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 import { mockApi } from './mockApi';
@@ -124,6 +124,8 @@ export const realApi: ReviewApi = {
     request<FileOutline>(`/api/reviews/${encodeURIComponent(id)}/outline?path=${encodeURIComponent(path)}&side=${side}`, { signal }),
   locate: (id: string, symbolId: string, signal?: AbortSignal) =>
     request<SymbolLocation>(`/api/reviews/${encodeURIComponent(id)}/locate?id=${encodeURIComponent(symbolId)}`, { signal }),
+  listFs: (path: string, hidden: boolean, signal?: AbortSignal) =>
+    request<FsListing>(`/api/fs/list?path=${encodeURIComponent(path)}&hidden=${hidden ? 1 : 0}`, { signal }),
 };
 
 export function getApi(mock: boolean): ReviewApi {

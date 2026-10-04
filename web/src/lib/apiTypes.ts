@@ -1,4 +1,4 @@
-import type { AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
+import type { AppConfig, FileOutline, FsListing, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 
 export type FileSide = 'old' | 'new';
 
@@ -42,6 +42,8 @@ export interface ReviewApi {
   getOutline(id: string, path: string, side: FileSide, signal?: AbortSignal): Promise<FileOutline>;
   /** (Tur 4) Herhangi bir sembolün konumu; bulunamazsa 404 (ApiError gövdeli). */
   locate(id: string, symbolId: string, signal?: AbortSignal): Promise<SymbolLocation>;
+  /** (Tur 5) Klasör seçici: `path` klasörünün alt klasörleri (boşsa ev dizini). */
+  listFs(path: string, hidden: boolean, signal?: AbortSignal): Promise<FsListing>;
 }
 
 /** `analysis`: iş sunucuda hata durumuyla bitti (job.error). */

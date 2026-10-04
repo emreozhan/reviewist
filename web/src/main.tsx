@@ -17,6 +17,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
 import './styles/source.css';
+import './styles/folderPicker.css';
 import './styles/workspace.css';
 import './styles/navigator.css';
 import './styles/structure.css';

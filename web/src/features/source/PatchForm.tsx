@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Field } from '../../components/Field';
+import { FolderPathInput } from './folderPicker/FolderPathInput';
 import type { SourceFormProps } from './GitSourceForm';
 import { serverErrorFor } from './serverFieldError';
 
@@ -25,7 +26,7 @@ export function PatchForm({ config, pending, onSubmit, serverError, onEdit }: So
         <textarea id="patch-text" className="input input--mono textarea" rows={10} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} placeholder={'diff --git a/src/main/java/… b/src/main/java/…\n@@ -12,7 +12,9 @@ …'} aria-invalid={!!error || undefined} aria-describedby={error ? 'patch-text-error' : 'patch-text-hint'} />
       </Field>
       <Field id="patch-repo" label="Repo yolu" optional error={repoError} hint="Verilirse dosya içerikleri ve diff dışındaki çağıranlar bu depodan okunur; verilmezse yalnız hunk'lar analiz edilir.">
-        <input id="patch-repo" className="input input--mono" value={repoPath} onChange={(e) => setRepoPath(e.target.value)} placeholder={config?.defaultRepoPath ?? 'C:/projeler/shop'} spellCheck={false} aria-invalid={!!repoError || undefined} aria-describedby={repoError ? 'patch-repo-error' : 'patch-repo-hint'} />
+        <FolderPathInput id="patch-repo" value={repoPath} onChange={setRepoPath} onPicked={onEdit} placeholder={config?.defaultRepoPath ?? 'C:/projeler/shop'} invalid={!!repoError} describedBy={repoError ? 'patch-repo-error' : 'patch-repo-hint'} />
       </Field>
       <div className="source-form__actions">
         <button type="submit" className="btn btn--primary btn--lg" disabled={pending}>

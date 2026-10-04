@@ -798,8 +798,10 @@ const MAX_TAGS = 200;
 
 export async function getGitRefs(repoPath: string): Promise<GitRefs> {
   const top = await resolveRepoRoot(repoPath);
+  // En son commit tarihine göre sıralı: yerel dalların bu sırası recentBranches olarak da döner.
   const refsOut = await runGit(top, [
     'for-each-ref',
+    '--sort=-committerdate',
     '--format=%(refname)',
     'refs/heads',
     'refs/remotes',
@@ -839,6 +841,7 @@ export async function getGitRefs(repoPath: string): Promise<GitRefs> {
     repoPath: top,
     currentBranch,
     defaultBase,
+    recentBranches: [...branches],
     branches: branches.sort((a, b) => a.localeCompare(b)),
     remoteBranches: remoteBranches.sort((a, b) => a.localeCompare(b)),
     tags,

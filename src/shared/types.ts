@@ -335,6 +335,8 @@ export interface GitRefs {
   currentBranch?: string;
   defaultBase?: string; // main/master/develop tahmini
   branches: string[];
+  /** (Tur 5) Yerel dallar, en son commit tarihine göre yeniden eskiye; head önerisi için. */
+  recentBranches?: string[];
   remoteBranches: string[];
   tags: string[];
   recentCommits: { sha: string; subject: string; author: string; date: string }[];

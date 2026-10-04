@@ -4,6 +4,7 @@
 import { z } from 'zod';
 import type { ReviewRequest } from '../shared/types.js';
 import type { ManagedChangeSet } from './common.js';
+import { isNetworkPath, NETWORK_PATH_MESSAGE } from './common.js';
 import { SourceError } from './errors.js';
 import { createGitChangeSet, createWorktreeChangeSet } from './git.js';
 import { createGithubChangeSet } from './github.js';
@@ -20,9 +21,12 @@ const str = (field: string) =>
     .trim()
     .min(1, { error: `${field} boş olamaz` });
 
+/** Yerel depo yolu: ağ yolu (UNC) kabul edilmez. */
+const localPath = (field: string) => str(field).refine((p) => !isNetworkPath(p), { error: NETWORK_PATH_MESSAGE });
+
 const gitSchema = z.object({
   kind: z.literal('git'),
-  repoPath: str('repoPath'),
+  repoPath: localPath('repoPath'),
   base: str('base'),
   head: str('head'),
   mode: z.enum(['range', 'mergeBase'], { error: "mode 'range' ya da 'mergeBase' olmalı" }).optional(),
@@ -30,7 +34,7 @@ const gitSchema = z.object({
 
 const worktreeSchema = z.object({
   kind: z.literal('worktree'),
-  repoPath: str('repoPath'),
+  repoPath: localPath('repoPath'),
   base: str('base').optional(),
   includeUntracked: z.boolean({ error: 'includeUntracked true/false olmalı' }).optional(),
 });
@@ -39,7 +43,7 @@ const githubSchema = z.object({
   kind: z.literal('github'),
   url: str('url'),
   token: z.string({ error: 'token metin olmalı' }).optional(),
-  localRepoPath: str('localRepoPath').optional(),
+  localRepoPath: localPath('localRepoPath').optional(),
 });
 
 const patchSchema = z.object({
@@ -48,7 +52,7 @@ const patchSchema = z.object({
     .string({ error: 'text metin olmalı' })
     .min(1, { error: 'text boş olamaz' })
     .max(MAX_PATCH_CHARS, { error: 'text çok büyük (en fazla 50 MB)' }),
-  repoPath: str('repoPath').optional(),
+  repoPath: localPath('repoPath').optional(),
 });
 
 export const reviewRequestSchema = z.discriminatedUnion('kind', [gitSchema, worktreeSchema, githubSchema, patchSchema], {

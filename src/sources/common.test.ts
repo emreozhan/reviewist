@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   githubStableKey,
   isBinaryContent,
+  isNetworkPath,
   gitStableKey,
   normalizeRepoKeyPath,
   patchStableKey,
@@ -96,5 +97,15 @@ describe('isBinaryContent', () => {
   it('8000 bayt sınırında kesilen çok baytlı karakter geçersiz sayılmaz', () => {
     const s = Buffer.concat([Buffer.from('\u0000' + 'x'.repeat(7997)), Buffer.from('ğğ', 'utf8')]);
     expect(isBinaryContent(s, 'A.java')).toBe(false);
+  });
+});
+
+describe('isNetworkPath', () => {
+  it('UNC ve uzun UNC yollarını ağ yolu sayar', () => {
+    for (const p of ['\\\\sunucu\\pay', '//sunucu/pay', '\\\\?\\UNC\\sunucu\\pay', '  \\\\evil\\x']) expect(isNetworkPath(p)).toBe(true);
+  });
+
+  it('yerel yolları kabul eder', () => {
+    for (const p of ['C:\\Users\\a', 'C:/repo', '/home/a', 'repo', '.\\x']) expect(isNetworkPath(p)).toBe(false);
   });
 });

@@ -32,6 +32,12 @@ const PATHS = {
   arrowRight: 'M3 8h10M9 4l4 4-4 4',
   tabs: 'M2 5h12v9H2zM2 5V2.5h5V5',
   outline: 'M3 3h10M5.5 6.5H13M5.5 10H13M3 13.5h10',
+  folder: 'M1.5 3.5h4.5l1.5 2h7v7.5h-13z',
+  home: 'M2 7.5L8 2.5l6 5M3.5 6.5v7h9v-7M6.5 13.5V10h3v3.5',
+  drive: 'M1.5 9.5h13v4h-13zM3 9.5L4.5 3h7L13 9.5M11.5 11.5h.5',
+  clock: 'M8 14.5a6.5 6.5 0 100-13 6.5 6.5 0 000 13zM8 4.5V8l2.5 1.5',
+  branch: 'M5 3v7.5M5 10.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM11 3.5a1.5 1.5 0 110 3 1.5 1.5 0 010-3zM11 6.5c0 2.5-6 2-6 4',
+  terminal: 'M1.5 2.5h13v11h-13zM4 6l2.5 2L4 10M8 10.5h4',
 } as const;
 
 export type IconName = keyof typeof PATHS;

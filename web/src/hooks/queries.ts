@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import type { FileOutline, ReviewModel, SymbolLocation } from '../../../src/shared/types';
@@ -25,6 +25,7 @@ export const queryKeys = {
   file: (mock: boolean, id: string, path: string, side: FileSide) => ['file', mock, id, path, side] as const,
   outline: (mock: boolean, id: string, path: string, side: FileSide) => ['outline', mock, id, path, side] as const,
   locate: (mock: boolean, id: string, symbolId: string) => ['locate', mock, id, symbolId] as const,
+  fs: (mock: boolean, path: string, hidden: boolean) => ['fs', mock, path, hidden] as const,
 };
 
 export function useConfig() {
@@ -148,4 +149,17 @@ export async function fetchLocation(client: QueryClient, api: ReviewApi, mock: b
     else if (!(isApiError(error) && error.status === 404)) console.warn('Sembol konumu alınamadı', error);
     return null;
   }
+}
+
+/** (Tur 5) Klasör seçici listesi; boş yol ev dizinidir. Erişim/bulunamadı hataları yeniden denenmez. */
+export function useFsList(path: string, hidden: boolean, enabled = true) {
+  const { api, mock } = useApi();
+  return useQuery({
+    queryKey: queryKeys.fs(mock, path, hidden),
+    queryFn: ({ signal }) => api.listFs(path, hidden, signal),
+    enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+    retry: (count, error) => !(isApiError(error) && error.status !== undefined && error.status < 500) && count < 1,
+  });
 }

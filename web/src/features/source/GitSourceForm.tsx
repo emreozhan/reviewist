@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { AppConfig, ReviewRequest } from '../../../../src/shared/types';
 import { Field } from '../../components/Field';
 import { Switch } from '../../components/Switch';
 import { useRefs } from '../../hooks/queries';
 import { RefCombobox } from './RefCombobox';
-import { isKnownRef } from './refOptions';
+import { isKnownRef, suggestHead } from './refOptions';
 import { RepoPathField } from './RepoPathField';
 import type { ServerFieldError } from './serverFieldError';
 import { serverErrorFor } from './serverFieldError';
@@ -33,12 +33,19 @@ export function GitSourceForm({ config, pending, onSubmit, serverError, onEdit }
   };
   const refs = useRefs(committed);
 
-  // Repo değişince önceki repodan kalan ve yenisinde olmayan ref'ler o reponun varsayılanlarına döner.
+  // Repo değişince önceki repodan kalan ve yenisinde olmayan ref'ler o reponun varsayılanlarına döner;
+  // head tabanla aynı kalacaksa tabandan farklı en güncel dal önerilir.
+  const latest = useRef({ base, head });
+  useEffect(() => {
+    latest.current = { base, head };
+  });
   useEffect(() => {
     const data = refs.data;
     if (!data) return;
-    setBase((b) => (isKnownRef(data, b) ? b : data.defaultBase || ''));
-    setHead((h) => (isKnownRef(data, h) ? h : data.currentBranch || ''));
+    const { base: b, head: h } = latest.current;
+    const nextBase = isKnownRef(data, b) ? b : data.defaultBase || '';
+    setBase(nextBase);
+    setHead(isKnownRef(data, h) && h !== nextBase ? h : suggestHead(data, nextBase));
   }, [refs.data]);
 
   const submit = (e: FormEvent) => {
@@ -55,7 +62,7 @@ export function GitSourceForm({ config, pending, onSubmit, serverError, onEdit }
 
   return (
     <form className="source-form" onSubmit={submit} onChange={onEdit} noValidate>
-      <RepoPathField id="git-repo" value={repoPath} onChange={setRepoPath} onCommit={() => setCommitted(repoPath.trim())} refsQuery={committed ? refs : undefined} error={errors.repoPath} />
+      <RepoPathField id="git-repo" value={repoPath} onChange={setRepoPath} onCommit={(v) => setCommitted(v.trim())} onPicked={() => { setErrors(({ repoPath: _picked, ...rest }) => rest); onEdit?.(); }} refsQuery={committed ? refs : undefined} error={errors.repoPath} />
       <div className="source-form__row">
         <Field id="git-base" label="Taban (base)" error={errors.base} hint="Dal, etiket ya da commit">
           <RefCombobox id="git-base" value={base} onChange={setBase} refs={refs.data} placeholder="main" invalid={!!errors.base} describedBy={errors.base ? 'git-base-error' : 'git-base-hint'} />

@@ -27,6 +27,7 @@ function fakeApi(overrides: Partial<ReviewApi>): ReviewApi {
     getFile: fail,
     getOutline: fail,
     locate: fail,
+    listFs: fail,
     ...overrides,
   };
 }

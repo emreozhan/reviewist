@@ -130,6 +130,20 @@ describe('GET /api/config ve /api/git/refs', () => {
     expect(q.status).toBe(200);
   });
 
+  it('refs ve analiz istekleri ağ yolunu (UNC) reddeder', async () => {
+    const { app } = make();
+    const refs = await app.request(`/api/git/refs?repoPath=${encodeURIComponent('\\\\evil\\share')}`);
+    expect(refs.status).toBe(400);
+    expect((await body<ApiError>(refs)).field).toBe('repoPath');
+    const job = await app.request('/api/jobs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'git', repoPath: '//evil/share', base: 'main', head: 'feature' }),
+    });
+    expect(job.status).toBe(400);
+    expect((await body<ApiError>(job)).field).toBe('repoPath');
+  });
+
   it('refs: depo verilmediyse 400, depo değilse 400 Türkçe', async () => {
     const { app } = createApp({ buildReview: fakeBuildReview });
     const res = await app.request('/api/git/refs');

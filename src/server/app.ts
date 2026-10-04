@@ -23,10 +23,11 @@ import type {
 import type { ReviewArtifacts } from '../core/buildReview.js';
 import { ReviewNavigator } from '../core/navigation.js';
 import { createChangeSet, parseReviewRequest, type CreateChangeSetOptions } from '../sources/index.js';
-import { sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
+import { isNetworkPath, NETWORK_PATH_MESSAGE, sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
 import { isSourceError, shortMessage, SourceError } from '../sources/errors.js';
 import { getGitRefs } from '../sources/git.js';
 import { DEFAULT_TOKEN_ENVS, resolveGithubToken } from '../sources/github.js';
+import { listDirectory } from './fsList.js';
 import { AnalysisQueue, JobManager, toApiError } from './jobs.js';
 
 /** `src/core/buildReview.ts` sözleşmesi (docs/CONTRACT.md). */
@@ -516,11 +517,23 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
 
   app.get('/api/git/refs', async (c) => {
     const q = c.req.query('repoPath')?.trim();
+    if (q && isNetworkPath(q)) return apiError(c, 400, NETWORK_PATH_MESSAGE, undefined, 'repoPath');
     const repoPath = q ? resolve(opts.defaultRepoPath ?? process.cwd(), q) : opts.defaultRepoPath;
     if (!repoPath) {
       return apiError(c, 400, 'repoPath parametresi gerekli (sunucu bir depo içinde başlatılmadı).', undefined, 'repoPath');
     }
     return c.json(await getGitRefs(repoPath));
+  });
+
+  // (Tur 5) Klasör seçici: yalnız klasör adları. Başka bir siteden tetiklenen istek (img/link) reddedilir;
+  // Sec-Fetch-Site göndermeyen istemciler (curl, eski tarayıcı) Host denetimiyle sınırlı kalır.
+  app.get('/api/fs/list', async (c) => {
+    const site = c.req.header('sec-fetch-site');
+    if (site === 'cross-site' || site === 'same-site') {
+      return apiError(c, 403, 'Klasör listesi yalnızca Reviewist arayüzünden istenebilir.', `sec-fetch-site: ${site}`);
+    }
+    const hidden = c.req.query('hidden') === '1';
+    return c.json(await listDirectory(c.req.query('path'), { hidden, cwd: opts.defaultRepoPath ?? process.cwd() }));
   });
 
   // Senkron (geri uyumluluk): analiz bitince ReviewModel döner.

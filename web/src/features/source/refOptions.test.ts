@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GitRefs } from '../../../../src/shared/types';
-import { buildRefOptions, filterRefOptions, isKnownRef } from './refOptions';
+import { buildRefOptions, filterRefOptions, isKnownRef, suggestHead } from './refOptions';
 
 const refs: GitRefs = {
   repoPath: 'C:/repo',
@@ -20,6 +20,20 @@ describe('isKnownRef', () => {
 
   it('dal, uzak dal, etiket, HEAD ifadesi ve SHA kabul eder', () => {
     for (const v of ['main', 'origin/main', 'v1.0', 'HEAD', 'HEAD~2', '08c678d']) expect(isKnownRef(refs, v)).toBe(true);
+  });
+});
+
+describe('suggestHead', () => {
+  it('geçerli dal tabanla aynıysa tabandan farklı en güncel dalı önerir', () => {
+    expect(suggestHead({ ...refs, recentBranches: ['main', 'feature/small-fix', 'feature/ai-refactor'] }, 'main')).toBe('feature/small-fix');
+  });
+
+  it('geçerli dal tabandan farklıysa onu önerir', () => {
+    expect(suggestHead({ ...refs, currentBranch: 'feature/ai-refactor' }, 'main')).toBe('feature/ai-refactor');
+  });
+
+  it('recentBranches yoksa alfabetik listeden seçer', () => {
+    expect(suggestHead(refs, 'main')).toBe('feature/ai-refactor');
   });
 });
 

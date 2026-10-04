@@ -30,6 +30,13 @@ export function isKnownRef(refs: GitRefs, value: string): boolean {
   return refs.branches.includes(v) || refs.remoteBranches.includes(v) || refs.tags.includes(v);
 }
 
+/** Head önerisi: tabandan farklıysa geçerli dal, değilse tabandan farklı en son commit almış dal. */
+export function suggestHead(refs: GitRefs, base: string): string {
+  if (refs.currentBranch && refs.currentBranch !== base) return refs.currentBranch;
+  const ordered = refs.recentBranches ?? refs.branches;
+  return ordered.find((b) => b !== base) ?? refs.currentBranch ?? '';
+}
+
 export function filterRefOptions(options: RefOption[], query: string, limit = 60): RefOption[] {
   const q = query.trim().toLowerCase();
   const list = q ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().startsWith(q)) : options;

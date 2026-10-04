@@ -39,7 +39,7 @@ export function WorktreeForm({ config, pending, onSubmit, serverError, onEdit }:
   return (
     <form className="source-form" onSubmit={submit} onChange={onEdit} noValidate>
       <p className="source-form__lead">Commit edilmemiş değişiklikleri (staged + unstaged) inceleyin; AI ajanının bıraktığı çalışma ağacı için idealdir.</p>
-      <RepoPathField id="wt-repo" value={repoPath} onChange={setRepoPath} onCommit={() => setCommitted(repoPath.trim())} refsQuery={committed ? refs : undefined} error={error} />
+      <RepoPathField id="wt-repo" value={repoPath} onChange={setRepoPath} onCommit={(v) => setCommitted(v.trim())} onPicked={() => { setError(undefined); onEdit?.(); }} refsQuery={committed ? refs : undefined} error={error} />
       <Field id="wt-base" label="Karşılaştırma tabanı" optional error={baseError} hint="Boş bırakılırsa HEAD ile karşılaştırılır.">
         <RefCombobox id="wt-base" value={base} onChange={setBase} refs={refs.data} placeholder="HEAD" invalid={!!baseError} describedBy={baseError ? 'wt-base-error' : 'wt-base-hint'} />
       </Field>

@@ -1,4 +1,4 @@
-import type { AppConfig, FileOutline, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
+import type { AppConfig, FileOutline, FsListing, GitRefs, ReviewJob, ReviewListItem, ReviewModel, ReviewRequest, SymbolLocation } from '../../../src/shared/types';
 import type { FileContentResponse, FileSide, LoadOptions, ProgressFn, ReviewApi } from './apiTypes';
 import { ApiRequestError } from './apiTypes';
 
@@ -180,5 +180,10 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
     const loc = mockLocate(symbolId);
     if (!loc) throw new ApiRequestError(`Sembol bulunamadı: ${symbolId}`, { kind: 'http', status: 404, endpoint: `mock:/locate?id=${symbolId}`, fromServerBody: true });
     return loc;
+  },
+  async listFs(path: string, hidden: boolean, signal?: AbortSignal): Promise<FsListing> {
+    await delay(90, signal);
+    const { mockListFs } = await import('../mock/fsTree');
+    return mockListFs(path, hidden);
   },
 };

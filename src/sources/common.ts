@@ -298,3 +298,14 @@ export function filterByExt(paths: string[], ext?: string): string[] {
   const e = ext.toLowerCase();
   return paths.filter((p) => p.toLowerCase().endsWith(e));
 }
+
+/**
+ * Ağ yolu mu (UNC: `\\sunucu\pay`, `//sunucu/pay`, `\\?\UNC\…`).
+ * Yerel sunucunun başka bir sayfa tarafından uzak SMB paylaşımına bağlanmaya zorlanmasını
+ * (Windows kimlik bilgisi sızıntısı) önlemek için depo yollarında reddedilir.
+ */
+export function isNetworkPath(p: string): boolean {
+  return /^[\\/]{2}/.test(p.trim());
+}
+
+export const NETWORK_PATH_MESSAGE = 'Ağ yolları (\\\\sunucu\\paylaşım) desteklenmiyor; yerel bir klasör seçin.';

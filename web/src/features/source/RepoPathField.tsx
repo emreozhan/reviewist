@@ -1,13 +1,16 @@
 import type { UseQueryResult } from '@tanstack/react-query';
 import type { GitRefs } from '../../../../src/shared/types';
 import { Field } from '../../components/Field';
+import { FolderPathInput } from './folderPicker/FolderPathInput';
 
 interface RepoPathFieldProps {
   id: string;
   value: string;
   onChange: (v: string) => void;
-  /** Alan bırakılınca (blur/Enter) ref'leri yüklemek için. */
-  onCommit: () => void;
+  /** Alan bırakılınca (blur/Enter) ya da klasör seçicide seçilince ref'leri yüklemek için (güncel değerle). */
+  onCommit: (value: string) => void;
+  /** Klasör seçicide seçim yapıldı. */
+  onPicked?: () => void;
   refsQuery?: UseQueryResult<GitRefs>;
   error?: string;
   optional?: boolean;
@@ -25,26 +28,19 @@ function refsStatus(q: UseQueryResult<GitRefs> | undefined): string | undefined 
   return undefined;
 }
 
-export function RepoPathField({ id, value, onChange, onCommit, refsQuery, error, optional, hint }: RepoPathFieldProps) {
+export function RepoPathField({ id, value, onChange, onCommit, onPicked, refsQuery, error, optional, hint }: RepoPathFieldProps) {
   const status = refsStatus(refsQuery);
   return (
     <Field id={id} label="Repo yolu" error={error} optional={optional} hint={status ?? hint ?? 'Yerel git deposunun kök dizini.'}>
-      <input
+      <FolderPathInput
         id={id}
-        className="input input--mono"
         value={value}
-        spellCheck={false}
+        onChange={onChange}
+        onCommit={onCommit}
+        onPicked={onPicked}
         placeholder="C:/projeler/shop"
-        aria-invalid={!!error || undefined}
-        aria-describedby={error ? `${id}-error` : `${id}-hint`}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onCommit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            onCommit();
-          }
-        }}
+        invalid={!!error}
+        describedBy={error ? `${id}-error` : `${id}-hint`}
       />
     </Field>
   );

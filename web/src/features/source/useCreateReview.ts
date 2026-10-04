@@ -3,6 +3,7 @@ import { useRef, useState } from 'react';
 import type { ReviewModel, ReviewRequest } from '../../../../src/shared/types';
 import type { AnalysisProgressState } from '../../lib/analysisRunner';
 import { runAnalysis } from '../../lib/analysisRunner';
+import { rememberRepo, repoPathOf } from '../../lib/recentRepos';
 import { navigate } from '../../lib/route';
 import { prepareIndex, queryKeys, useApi } from '../../hooks/queries';
 
@@ -33,7 +34,10 @@ export function useCreateReview() {
       await prepareIndex(model, () => report({ ...last, download: { phase: 'index', loaded: last.download?.loaded ?? 0 } }));
       return model;
     },
-    onSuccess: async (model) => {
+    onSuccess: async (model, req) => {
+      // Klasör seçicide "Son kullanılan repolar": kullanıcı bir yerel yol verdiyse, sunucunun çözdüğü depo kökü tercih edilir.
+      const requested = repoPathOf(req)?.trim();
+      if (requested) rememberRepo(model.source.repoPath ?? requested);
       queryClient.setQueryData(queryKeys.review(mock, model.id), model);
       await queryClient.invalidateQueries({ queryKey: queryKeys.reviews(mock) });
       navigate({ name: 'review', id: model.id, tab: 'workspace', params: {} });
