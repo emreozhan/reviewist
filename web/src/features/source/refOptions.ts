@@ -22,6 +22,14 @@ export function buildRefOptions(refs: GitRefs | undefined): RefOption[] {
   return out;
 }
 
+/** Değer bu repoda anlamlı bir ref mi: dal/uzak dal/etiket, HEAD ifadesi ya da commit SHA'sı gibi görünen metin. */
+export function isKnownRef(refs: GitRefs, value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  if (/^HEAD([~^]\d*)*$/.test(v) || /^[0-9a-f]{7,40}$/i.test(v)) return true;
+  return refs.branches.includes(v) || refs.remoteBranches.includes(v) || refs.tags.includes(v);
+}
+
 export function filterRefOptions(options: RefOption[], query: string, limit = 60): RefOption[] {
   const q = query.trim().toLowerCase();
   const list = q ? options.filter((o) => o.label.toLowerCase().includes(q) || o.value.toLowerCase().startsWith(q)) : options;

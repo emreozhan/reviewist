@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Field } from '../../components/Field';
 import { Switch } from '../../components/Switch';
 import { useRefs } from '../../hooks/queries';
 import type { SourceFormProps } from './GitSourceForm';
 import { RefCombobox } from './RefCombobox';
+import { isKnownRef } from './refOptions';
 import { RepoPathField } from './RepoPathField';
 import { serverErrorFor } from './serverFieldError';
 
@@ -17,6 +18,13 @@ export function WorktreeForm({ config, pending, onSubmit, serverError, onEdit }:
   const error = localError ?? serverErrorFor(serverError, 'worktree', 'repoPath');
   const baseError = serverErrorFor(serverError, 'worktree', 'base');
   const refs = useRefs(committed);
+
+  // Repo değişince yeni repoda olmayan taban temizlenir (boş = HEAD).
+  useEffect(() => {
+    const data = refs.data;
+    if (!data) return;
+    setBase((b) => (b && !isKnownRef(data, b) ? '' : b));
+  }, [refs.data]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();

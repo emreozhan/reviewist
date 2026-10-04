@@ -283,6 +283,44 @@
   font-size: var(--fs-xxs);
 }
 
+.combo__input {
+  padding-right: 30px;
+}
+
+.combo__toggle {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 28px;
+  border: 0;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.combo__toggle:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.combo__toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.combo__opt.is-current .combo__label {
+  color: var(--accent);
+}
+
+.combo__empty {
+  padding: 8px 10px;
+  color: var(--text-faint);
+  font-size: var(--fs-xs);
+}
+
 /* Analiz ilerleme */
 .analysis {
   position: relative;

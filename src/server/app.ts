@@ -632,9 +632,19 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   // --- statik arayüz ---------------------------------------------------------
   const staticDir = opts.staticDir;
   if (staticDir && existsSync(join(staticDir, 'index.html'))) {
+    // index.html her istekte doğrulanır (yeniden derlemeden sonra eski arayüz kalmasın); hash'li paketler değişmez.
+    app.use('/*', async (c, next) => {
+      await next();
+      if (c.res.ok && !c.res.headers.has('Cache-Control')) {
+        c.res.headers.set('Cache-Control', c.req.path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+      }
+    });
     app.use('/*', serveStatic({ root: staticDir }));
     const indexPath = join(staticDir, 'index.html');
-    app.get('*', async (c) => c.html(await readFile(indexPath, 'utf8')));
+    app.get('*', async (c) => {
+      c.header('Cache-Control', 'no-cache');
+      return c.html(await readFile(indexPath, 'utf8'));
+    });
   }
 
   app.notFound((c) => apiError(c, 404, 'Bulunamadı.', c.req.path));

@@ -5,6 +5,7 @@ import { Field } from '../../components/Field';
 import { Switch } from '../../components/Switch';
 import { useRefs } from '../../hooks/queries';
 import { RefCombobox } from './RefCombobox';
+import { isKnownRef } from './refOptions';
 import { RepoPathField } from './RepoPathField';
 import type { ServerFieldError } from './serverFieldError';
 import { serverErrorFor } from './serverFieldError';
@@ -32,10 +33,12 @@ export function GitSourceForm({ config, pending, onSubmit, serverError, onEdit }
   };
   const refs = useRefs(committed);
 
+  // Repo değişince önceki repodan kalan ve yenisinde olmayan ref'ler o reponun varsayılanlarına döner.
   useEffect(() => {
-    if (!refs.data) return;
-    setBase((b) => b || refs.data.defaultBase || '');
-    setHead((h) => h || refs.data.currentBranch || '');
+    const data = refs.data;
+    if (!data) return;
+    setBase((b) => (isKnownRef(data, b) ? b : data.defaultBase || ''));
+    setHead((h) => (isKnownRef(data, h) ? h : data.currentBranch || ''));
   }, [refs.data]);
 
   const submit = (e: FormEvent) => {

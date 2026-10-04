@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import type { GitRefs } from '../../../../src/shared/types';
 import { buildRefOptions, filterRefOptions } from './refOptions';
@@ -16,20 +16,31 @@ interface RefComboboxProps {
 /** Aranabilir ref seçici (ARIA combobox): dal, uzak dal, etiket veya son commit; serbest metin de kabul eder. */
 export function RefCombobox({ id, value, onChange, refs, placeholder, invalid, describedBy }: RefComboboxProps) {
   const listId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const options = filterRefOptions(buildRefOptions(refs), value);
+  // null = kullanıcı açtıktan sonra henüz yazmadı: tüm refler gösterilir (mevcut değerle süzülmez).
+  const [query, setQuery] = useState<string | null>(null);
+  const all = buildRefOptions(refs);
+  const options = filterRefOptions(all, query ?? '');
+
+  const openList = () => {
+    setQuery(null);
+    setActive(Math.max(0, all.findIndex((o) => o.value === value)));
+    setOpen(true);
+  };
 
   const choose = (v: string) => {
     onChange(v);
     setOpen(false);
+    setQuery(null);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setOpen(true);
-      setActive((a) => Math.min(options.length - 1, a + 1));
+      if (!open) openList();
+      else setActive((a) => Math.min(options.length - 1, a + 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setActive((a) => Math.max(0, a - 1));
@@ -45,12 +56,14 @@ export function RefCombobox({ id, value, onChange, refs, placeholder, invalid, d
     }
   };
 
+  const showEmpty = open && refs !== undefined && options.length === 0;
   let lastGroup = '';
   return (
     <div className="combo">
       <input
+        ref={inputRef}
         id={id}
-        className="input input--mono"
+        className="input input--mono combo__input"
         role="combobox"
         aria-expanded={open && options.length > 0}
         aria-controls={listId}
@@ -64,13 +77,34 @@ export function RefCombobox({ id, value, onChange, refs, placeholder, invalid, d
         placeholder={placeholder}
         onChange={(e) => {
           onChange(e.target.value);
+          setQuery(e.target.value);
           setOpen(true);
           setActive(0);
         }}
-        onFocus={() => setOpen(true)}
+        onFocus={openList}
+        onClick={() => {
+          if (!open) openList();
+        }}
         onBlur={() => setOpen(false)}
         onKeyDown={onKeyDown}
       />
+      <button
+        type="button"
+        className="combo__toggle"
+        tabIndex={-1}
+        aria-label="Ref listesini aç"
+        disabled={!refs}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          if (open) setOpen(false);
+          else {
+            inputRef.current?.focus();
+            openList();
+          }
+        }}
+      >
+        ▾
+      </button>
       {open && options.length > 0 && (
         <ul id={listId} className="combo__list" role="listbox" aria-label="Ref önerileri">
           {options.map((o, i) => {
@@ -82,7 +116,7 @@ export function RefCombobox({ id, value, onChange, refs, placeholder, invalid, d
                 id={`${listId}-${i}`}
                 role="option"
                 aria-selected={i === active}
-                className={`combo__opt${i === active ? ' is-active' : ''}`}
+                className={`combo__opt${i === active ? ' is-active' : ''}${o.value === value ? ' is-current' : ''}`}
                 data-group={header ?? undefined}
                 onMouseDown={(e) => {
                   e.preventDefault();
@@ -96,6 +130,11 @@ export function RefCombobox({ id, value, onChange, refs, placeholder, invalid, d
             );
           })}
         </ul>
+      )}
+      {showEmpty && (
+        <div className="combo__list combo__empty" role="status">
+          Eşleşen ref yok; yazdığınız değer olduğu gibi kullanılır.
+        </div>
       )}
     </div>
   );

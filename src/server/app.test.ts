@@ -643,10 +643,13 @@ describe('statik arayüz', () => {
       const js = await app.request('/assets/app.js');
       expect(js.status).toBe(200);
       expect(js.headers.get('content-type')).toContain('javascript');
+      expect(js.headers.get('cache-control')).toContain('immutable');
       const spa = await app.request('/reviews/abc');
       expect(spa.status).toBe(200);
+      expect(spa.headers.get('cache-control')).toBe('no-cache');
       expect(await spa.text()).toContain('<title>Reviewist</title>');
       const root = await app.request('/');
+      expect(root.headers.get('cache-control')).toBe('no-cache');
       expect(await root.text()).toContain('Reviewist');
       const api = await app.request('/api/yok');
       expect(api.status).toBe(404);
