@@ -9,6 +9,7 @@ import { HistoryTrail } from '../tabs/HistoryTrail';
 import { TabBar } from '../tabs/TabBar';
 import { tabDomId } from '../tabs/TabItem';
 import { FileHeader } from './FileHeader';
+import { NoChanges } from './NoChanges';
 import { useReviewCtx } from './ReviewContext';
 
 /** Diff içindeki dosya: mevcut Yapı / Diff görünümleri. */
@@ -49,13 +50,16 @@ function DiffFilePanel({ fileId }: { fileId: string }) {
 export function CenterPanel() {
   const active = useTabs((s) => activeTab(s));
   const activeIndex = useTabs((s) => s.tabs.findIndex((t) => t.key === s.activeKey));
+  const { review } = useReviewCtx();
 
   return (
     <div className="center">
       <TabBar />
       <HistoryTrail />
       <div className="center__panel" role="tabpanel" id="center-tabpanel" aria-labelledby={activeIndex >= 0 ? tabDomId(activeIndex) : undefined}>
-        {!active ? (
+        {review.files.length === 0 ? (
+          <NoChanges source={review.source} />
+        ) : !active ? (
           <div className="center-empty">
             <p className="center-empty__title">Bir dosya seçin</p>
             <p className="muted">

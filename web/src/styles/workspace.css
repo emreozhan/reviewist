@@ -427,6 +427,16 @@
   text-align: center;
 }
 
+.center-empty--nochange {
+  max-width: 560px;
+  margin: 0 auto;
+  gap: 10px;
+}
+
+.center-empty--nochange p {
+  margin: 0;
+}
+
 .center-empty__title {
   margin: 0;
   font-family: var(--font-display);

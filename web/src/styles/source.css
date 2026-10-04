@@ -177,7 +177,14 @@
 
 .source-form {
   display: grid;
+  /* minmax(0, …): uzun yol/SHA değerleri sütunu genişletip formu taşırmasın, kısaltılsın */
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
+}
+
+.source-form .field,
+.refsel {
+  min-width: 0;
 }
 
 .source-form__lead {
@@ -187,7 +194,7 @@
 
 .source-form__row {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -211,7 +218,7 @@
   }
 
   .source-form__row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .source-form__arrow {

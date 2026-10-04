@@ -20,6 +20,7 @@ import {
   type ManagedChangeSet,
 } from './common.js';
 import { SourceError } from './errors.js';
+import { resolveGitBinary } from './gitBinary.js';
 import { hunksForAddedContent, parseUnifiedDiff } from './unifiedDiff.js';
 
 // ---------------------------------------------------------------------------
@@ -108,7 +109,7 @@ export async function runGitResult(repoPath: string, args: string[], opts: RunGi
   return await new Promise<GitResult>((resolvePromise, reject) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn('git', gitArgs(args, opts.config), {
+      child = spawn(resolveGitBinary().command, gitArgs(args, opts.config), {
         cwd: repoPath,
         windowsHide: true,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(opts.env ?? {}) },
@@ -161,10 +162,11 @@ export async function runGitResult(repoPath: string, args: string[], opts: RunGi
 function gitSpawnError(err: unknown): SourceError {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ENOENT') {
-    return new SourceError('Git bulunamadı. Git kurulu olmalı ve PATH içinde bulunmalı.', {
-      status: 500,
-      code: 'GIT_NOT_FOUND',
-    });
+    const info = resolveGitBinary();
+    return new SourceError(
+      "Git bulunamadı. Git kurulu olmalı; sunucu PATH'i eksik bir ortamdan başlatıldıysa git.exe yolunu REVIEWIST_GIT ortam değişkeniyle verin.",
+      { status: 500, code: 'GIT_NOT_FOUND', detail: `Denenen: ${info.tried.join(', ')}` },
+    );
   }
   return new SourceError('Git süreci başlatılamadı.', {
     status: 500,
@@ -353,7 +355,7 @@ export class GitBlobReader {
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.proc) return this.proc;
-    const proc = spawn('git', gitArgs(['cat-file', '--batch']), {
+    const proc = spawn(resolveGitBinary().command, gitArgs(['cat-file', '--batch']), {
       cwd: this.repoPath,
       windowsHide: true,
       env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
