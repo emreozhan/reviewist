@@ -180,9 +180,12 @@ body.is-resizing-y * {
 /* ---- Orta panel: sekmeler ---- */
 .center {
   grid-template-rows: auto auto minmax(0, 1fr);
+  /* Geniş içerik sütunu taşırmasın: panel görünür genişlikte kalır (gözatma pencereleri buna göre yerleşir). */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .center__panel {
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }

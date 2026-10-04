@@ -2,6 +2,8 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent } from 'react';
 import type { ImpactNodeStatus } from '../../../src/shared/types';
 import { menuKeyNav, usePopoverDismiss } from '../hooks/usePopoverDismiss';
+import type { OpenIntent } from '../lib/openIntent';
+import { intentOf } from '../lib/openIntent';
 import { StatusGlyph } from './StatusGlyph';
 
 export interface SymbolMenuItem {
@@ -19,13 +21,14 @@ interface SymbolMenuProps<T extends SymbolMenuItem> {
   items: T[];
   /** Ekrana göre konum (tıklama noktası ya da tetikleyicinin alt kenarı). */
   at: { x: number; y: number };
-  onPick: (item: T, background: boolean) => void;
+  /** `intent`: düz tık gözat, Shift sekme, Ctrl/orta tık arka plan sekmesi (`background` geriye uyumluluk için). */
+  onPick: (item: T, background: boolean, intent: OpenIntent) => void;
   onClose: () => void;
 }
 
 /**
  * Sembol seçim menüsü (aşırı yüklemeler, çağıranlar, alt tipler…). Ok tuşlarıyla gezilir, Esc/dışarı tık kapatır.
- * Tık: öne gelen sekme; Ctrl/Cmd+tık ya da orta tık: arka plan sekmesi.
+ * Tık: gözatma penceresi; Shift+tık: sekmede aç; Ctrl/Cmd+tık ya da orta tık: arka plan sekmesi.
  */
 export function SymbolMenu<T extends SymbolMenuItem>({ title, items, at, onPick, onClose }: SymbolMenuProps<T>) {
   const ref = useRef<HTMLDivElement>(null);
@@ -49,7 +52,8 @@ export function SymbolMenu<T extends SymbolMenuItem>({ title, items, at, onPick,
 
   const pick = (item: T, e: MouseEvent) => {
     e.preventDefault();
-    onPick(item, e.ctrlKey || e.metaKey || e.button === 1);
+    const intent = intentOf(e);
+    onPick(item, intent === 'background', intent);
     onClose();
   };
 
@@ -64,7 +68,7 @@ export function SymbolMenu<T extends SymbolMenuItem>({ title, items, at, onPick,
           className="smenu__item"
           onClick={(e) => pick(item, e)}
           onAuxClick={(e) => e.button === 1 && pick(item, e)}
-          onMouseDown={(e) => e.button === 1 && e.preventDefault()}
+          onMouseDown={(e) => (e.button === 1 || e.shiftKey) && e.preventDefault()}
         >
           {item.status ? <StatusGlyph status={item.status} size="sm" /> : <span className="smenu__dot" aria-hidden="true" />}
           <span className="smenu__main">
@@ -74,7 +78,7 @@ export function SymbolMenu<T extends SymbolMenuItem>({ title, items, at, onPick,
           {item.note && <span className="smenu__note">{item.note}</span>}
         </button>
       ))}
-      <p className="smenu__hint">Ctrl+tık: arka plan sekmesi</p>
+      <p className="smenu__hint">Tık: gözat · Shift: sekmede aç · Ctrl: arka plan sekmesi</p>
     </div>
   );
 }

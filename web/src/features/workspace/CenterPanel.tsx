@@ -4,6 +4,8 @@ import { useTabs } from '../../state/tabsStore';
 import { useUi } from '../../state/uiStore';
 import { SourceTab } from '../codeview/SourceTab';
 import { DiffView } from '../diff/DiffView';
+import { PeekFromContext } from '../peek/PeekContext';
+import { PeekLayer } from '../peek/PeekLayer';
 import { StructureView } from '../structure/StructureView';
 import { HistoryTrail } from '../tabs/HistoryTrail';
 import { TabBar } from '../tabs/TabBar';
@@ -46,7 +48,10 @@ function DiffFilePanel({ fileId }: { fileId: string }) {
   );
 }
 
-/** Orta panel: sekme çubuğu + gezinme izi + etkin sekmenin içeriği (diff içi: Yapı/Diff, diff dışı: Kaynak). */
+/**
+ * Orta panel: sekme çubuğu + gezinme izi + etkin sekmenin içeriği (diff içi: Yapı/Diff, diff dışı: Kaynak).
+ * Koddaki bağlantılar etkin sekmenin önünde gözatma pencereleri açar (PeekLayer); buradan açılan yeni zincir başlatır.
+ */
 export function CenterPanel() {
   const active = useTabs((s) => activeTab(s));
   const activeIndex = useTabs((s) => s.tabs.findIndex((t) => t.key === s.activeKey));
@@ -57,13 +62,14 @@ export function CenterPanel() {
       <TabBar />
       <HistoryTrail />
       <div className="center__panel" role="tabpanel" id="center-tabpanel" aria-labelledby={activeIndex >= 0 ? tabDomId(activeIndex) : undefined}>
+        <PeekFromContext.Provider value="new">
         {review.files.length === 0 ? (
           <NoChanges source={review.source} />
         ) : !active ? (
           <div className="center-empty">
             <p className="center-empty__title">Bir dosya seçin</p>
             <p className="muted">
-              Okuma planından başlayın ya da <kbd>j</kbd> / <kbd>k</kbd> ile gezinin. Bir metoda tıklamak sınıfını yeni sekmede açar.
+              Okuma planından başlayın ya da <kbd>j</kbd> / <kbd>k</kbd> ile gezinin. Koddaki bir referansa tıklamak onu önde bir gözatma penceresinde açar; <kbd>Shift</kbd>+tık sekmede açar.
             </p>
           </div>
         ) : active.inDiff ? (
@@ -71,6 +77,8 @@ export function CenterPanel() {
         ) : (
           <SourceTab key={active.key} tab={active} />
         )}
+        </PeekFromContext.Provider>
+        <PeekLayer />
       </div>
     </div>
   );

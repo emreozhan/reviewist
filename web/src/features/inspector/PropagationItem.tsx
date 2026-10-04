@@ -1,18 +1,19 @@
 import { useState } from 'react';
 import { StatusGlyph } from '../../components/StatusGlyph';
-import { linkProps, useCodeNav } from '../../hooks/useCodeNav';
+import { intentLinkProps } from '../../hooks/useCodeNav';
+import { useSymbolOpener } from '../../hooks/useSymbolOpener';
 import { CONFIDENCE_LABEL } from '../../lib/labels';
 import type { PropItem } from '../../lib/propagation';
 import { baseName } from '../../lib/reviewIndex';
 import { ExternalPreview } from './ExternalPreview';
 
 /**
- * Yayılım öğesi (çağıran, çağrılan, override, alt tip): tıklayınca sembolün sınıfı yeni sekmede öne gelir
- * ve ilgili metoda (çağıranlarda çağrı satırına) gidilir. Ctrl/Cmd+tık ya da orta tık: arka plan sekmesi.
+ * Yayılım öğesi (çağıran, çağrılan, override, alt tip): tıklayınca sembol orta panelin önünde gözatma penceresinde
+ * açılır (çağıranlarda çağrı satırına gidilir). Shift+tık: sekmede aç; Ctrl/Cmd+tık ya da orta tık: arka plan sekmesi.
  * Diff dışı öğelerde ▸ ile satır önizlemesi yerinde açılır.
  */
 export function PropagationItem({ item, isCall }: { item: PropItem; isCall: boolean }) {
-  const nav = useCodeNav();
+  const openSymbol = useSymbolOpener();
   const [open, setOpen] = useState(false);
   // Dosya adı etiketteki tip adıyla aynıysa yalnız satırı göster (tekrarı önler).
   const typeName = item.label.split('.')[0];
@@ -27,7 +28,7 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
 
   // Çağrı yeri bilinen dosya/satırdır; diğerlerinde konum ReviewModel'den ya da /locate'ten bulunur.
   const hint = isCall && item.file ? { file: item.file, line: item.line, side: item.side, callSite: true } : undefined;
-  const link = linkProps((background) => void nav.openSymbol(item.id, { background, hint }));
+  const link = intentLinkProps((intent, origin, el) => void openSymbol(item.id, intent, { hint, origin, returnFocus: el }));
 
   return (
     <li className={`pitem ${item.inDiff ? 'pitem--in' : 'pitem--out'}${open ? ' is-open' : ''}${item.confidence ? ` pitem--${item.confidence}` : ''}`}>
@@ -35,7 +36,7 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
         <button
           type="button"
           className="pitem__btn"
-          title={`${isCall ? 'Çağrı satırını' : 'Sınıfını'} yeni sekmede aç${item.inDiff ? '' : ' (diff dışı, değişmedi)'} — Ctrl+tık: arka planda`}
+          title={`${isCall ? 'Çağrı satırına' : 'Koduna'} gözat${item.inDiff ? '' : ' (diff dışı, değişmedi)'} — Shift+tık: sekmede aç · Ctrl+tık: arka plan sekmesi`}
           {...link}
         >
           {item.status ? <StatusGlyph status={item.inDiff ? item.status : 'impacted'} size="sm" /> : <span className="pitem__dot" aria-hidden="true" />}

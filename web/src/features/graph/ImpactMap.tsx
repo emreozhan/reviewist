@@ -1,6 +1,7 @@
 import { Background, BackgroundVariant, Controls, MiniMap, ReactFlow } from '@xyflow/react';
 import type { NodeMouseHandler } from '@xyflow/react';
 import { useCodeNav } from '../../hooks/useCodeNav';
+import { intentOf } from '../../lib/openIntent';
 import { useMemo, useState } from 'react';
 import { defaultGraphFilter, selectSubgraph } from '../../lib/graphLayout';
 import { useTheme } from '../../state/theme';
@@ -35,7 +36,7 @@ export function ImpactMap() {
   const fitSignature = useMemo(() => `${JSON.stringify(filter)}|${sub.nodes.length}|${sub.edges.length}`, [filter, sub]);
 
   const nav = useCodeNav();
-  // Tık: ayrıntı kartı; çift tık: sınıfı sekmede öne gelir; Ctrl/Cmd+tık: arka plan sekmesi.
+  // Tık: ayrıntı kartı; çift tık: çalışma alanında gözatma penceresi (Shift+çift tık: sekmede); Ctrl/Cmd+tık: arka plan sekmesi.
   const onNodeClick: NodeMouseHandler<ImpactFlowNode> = (e, node) => {
     if (e.ctrlKey || e.metaKey) {
       void nav.openSymbol(node.id, { background: true });
@@ -43,7 +44,8 @@ export function ImpactMap() {
     }
     setSelectedId((cur) => (cur === node.id ? null : node.id));
   };
-  const onNodeDoubleClick: NodeMouseHandler<ImpactFlowNode> = (_e, node) => void nav.openSymbol(node.id);
+  const onNodeDoubleClick: NodeMouseHandler<ImpactFlowNode> = (e, node) =>
+    void nav.openByIntent(node.id, intentOf({ shiftKey: e.shiftKey }), { from: 'top' });
 
   return (
     <div className="gmap">

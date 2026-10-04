@@ -26,6 +26,7 @@ import './styles/inspector.css';
 import './styles/graph.css';
 import './styles/findings.css';
 import './styles/tabs.css';
+import './styles/peek.css';
 
 import { App } from './App';
 import { isApiError } from './lib/api';

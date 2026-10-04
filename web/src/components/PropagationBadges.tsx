@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { MemberChange, TypeChange } from '../../../src/shared/types';
 import { useReviewCtx } from '../features/workspace/ReviewContext';
-import { useCodeNav } from '../hooks/useCodeNav';
+import { useSymbolOpener } from '../hooks/useSymbolOpener';
 import { CONFIDENCE_LABEL } from '../lib/labels';
 import { callerCounts } from '../lib/propagation';
 import type { ReviewIndex } from '../lib/reviewIndex';
@@ -39,12 +39,12 @@ function symbolTarget(index: ReviewIndex, id: string, key: string): Target {
 
 /**
  * "↗ 3 çağıran (1 diff dışı)", "⇣ 3 alt sınıfta override" gibi yayılım göstergeleri.
- * Her gösterge bir menü açar; seçilen sembolün sınıfı yeni sekmede öne gelir (Ctrl+tık: arka planda).
+ * Her gösterge bir menü açar; seçilen sembol gözatma penceresinde açılır (Shift+tık: sekmede, Ctrl+tık: arka plan sekmesi).
  */
 export function PropagationBadges({ member, type }: PropagationBadgesProps) {
   const { index } = useReviewCtx();
-  const nav = useCodeNav();
-  const [open, setOpen] = useState<{ key: string; x: number; y: number } | null>(null);
+  const openSymbol = useSymbolOpener();
+  const [open, setOpen] = useState<{ key: string; x: number; y: number; el: HTMLElement } | null>(null);
   const items: Badge[] = [];
   if (member) {
     const c = callerCounts(member.callers, (file) => index.fileById.has(file));
@@ -61,8 +61,8 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
         text: `${c.verified} çağıran${c.outside > 0 ? ` (${c.outside} diff dışı)` : ''}${c.likely > 0 ? ` · ${c.likely} olası` : ''}`,
         outside: c.outside > 0,
         title: c.likely > 0
-          ? `Bu sembolü çağıran yerler. ${c.likely} tanesi "olası": alıcı tipi kesin çözülemedi, overload/arity ile eşlendi. Tıklayın: listeden sekmede açın.`
-          : 'Bu sembolü çağıran yerler (alıcı tipi çözüldü). Tıklayın: listeden sekmede açın.',
+          ? `Bu sembolü çağıran yerler. ${c.likely} tanesi "olası": alıcı tipi kesin çözülemedi, overload/arity ile eşlendi. Tıklayın: listeden seçip gözatın.`
+          : 'Bu sembolü çağıran yerler (alıcı tipi çözüldü). Tıklayın: listeden seçip gözatın.',
         tone: c.likely > 0 ? 'likely' : undefined,
         menuTitle: 'Çağıranlar',
         targets: member.callers.map((cr, i) => ({ cr, i })).filter(({ cr }) => cr.confidence !== 'name-only').map(({ cr, i }) => callTarget(cr, i)),
@@ -86,7 +86,7 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
         glyph: '⇣',
         text: `${member.overriddenBy.length} alt sınıfta override`,
         outside: false,
-        title: 'Alt tiplerde bu metodu override edenler. Tıklayın: listeden sekmede açın.',
+        title: 'Alt tiplerde bu metodu override edenler. Tıklayın: listeden seçip gözatın.',
         menuTitle: 'Override edenler',
         targets: member.overriddenBy.map((id, i) => symbolTarget(index, id, `o${i}`)),
       });
@@ -109,7 +109,7 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
       glyph: '⇣',
       text: `${type.subTypes.length} alt tip`,
       outside: false,
-      title: 'Doğrudan alt tipler / implementasyonlar. Tıklayın: listeden sekmede açın.',
+      title: 'Doğrudan alt tipler / implementasyonlar. Tıklayın: listeden seçip gözatın.',
       menuTitle: 'Alt tipler',
       targets: type.subTypes.map((id, i) => symbolTarget(index, id, `s${i}`)),
     });
@@ -129,7 +129,8 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
           aria-expanded={open?.key === i.key}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            setOpen((o) => (o?.key === i.key ? null : { key: i.key, x: r.left, y: r.bottom + 4 }));
+            const el = e.currentTarget;
+            setOpen((o) => (o?.key === i.key ? null : { key: i.key, x: r.left, y: r.bottom + 4, el }));
           }}
         >
           <span aria-hidden="true">{i.glyph}</span> {i.text}
@@ -141,7 +142,7 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
           items={openBadge.targets}
           at={{ x: open.x, y: open.y }}
           onClose={() => setOpen(null)}
-          onPick={(t, background) => void nav.openSymbol(t.id, { background, hint: t.hint })}
+          onPick={(t, _background, intent) => void openSymbol(t.id, intent, { hint: t.hint, origin: { x: open.x, y: open.y }, returnFocus: open.el })}
         />
       )}
     </span>

@@ -122,7 +122,8 @@ export function refSpansFor(line: number, refs: readonly SymbolRef[] | undefined
       start: r.startCol,
       end: r.endCol,
       cls: `xref${changed ? ` xref--changed xref--${changed}` : ''}${multi ? ' xref--multi' : ''}`,
-      attrs: { 'data-ln': String(line), 'data-ri': String(i), title: titleOf(r) },
+      // Klavyeyle erişim: bağlantı odaklanabilir, Enter ile açılır (useCodeRefs).
+      attrs: { 'data-ln': String(line), 'data-ri': String(i), title: titleOf(r), role: 'link', tabindex: '0' },
     };
   });
 }

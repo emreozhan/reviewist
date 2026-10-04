@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import type { MouseEvent } from 'react';
+import type { KeyboardEvent, MouseEvent } from 'react';
 import { PadRow } from '../diff/PadRow';
 import { useRowWindow } from '../diff/useRowWindow';
 import { escapeHtml } from '../../lib/highlight';
@@ -19,6 +19,7 @@ interface SourceCodeProps {
     onClick: (e: MouseEvent) => void;
     onAuxClick: (e: MouseEvent) => void;
     onMouseDown: (e: MouseEvent) => void;
+    onKeyDown?: (e: KeyboardEvent) => void;
   };
 }
 
