@@ -420,10 +420,39 @@ export interface SymbolLocation {
   typeId?: string; // sembolün ait olduğu (ya da kendisi olan) tip id'si
 }
 
+// ---------------------------------------------------------------------------
+// Klasör seçici (Tur 5): yerel repo yolunu seçmek için sunucu tarafı dizin listesi
+// ---------------------------------------------------------------------------
+
+export interface FsEntry {
+  name: string;
+  path: string; // mutlak, platformun ayırıcısıyla
+  isGitRepo: boolean; // doğrudan altında .git (klasör ya da dosya) var
+  hidden: boolean; // nokta ile başlayan ya da Windows gizli özniteliği
+}
+
+export interface FsRoot {
+  label: string; // 'Ev', 'Belgeler', 'C:', 'Masaüstü', 'Çalışma dizini'
+  path: string;
+  kind: 'home' | 'drive' | 'special' | 'cwd';
+}
+
+export interface FsListing {
+  path: string; // normalize edilmiş mutlak yol
+  parent?: string; // kökte undefined
+  isGitRepo: boolean;
+  /** Bu yol bir git deposunun içindeyse (alt klasörüyse) deponun kökü. */
+  repoRoot?: string;
+  entries: FsEntry[]; // yalnızca klasörler, ada göre sıralı (git repoları önce değil, alfabetik)
+  roots: FsRoot[];
+  truncated: boolean; // çok fazla girdi varsa ilk N döner
+}
+
 /*
  * Uç noktalar (hepsi JSON):
  *   GET  /api/config                                   -> AppConfig
  *   GET  /api/git/refs?repoPath=...                    -> GitRefs
+ *   GET  /api/fs/list?path=...&hidden=0|1             -> FsListing      (path boşsa ev dizini; yalnız klasör adları, dosya içeriği okunmaz)
  *   POST /api/reviews            body: ReviewRequest   -> ReviewModel   (hata: 4xx/5xx ApiError)  [senkron]
  *   POST /api/jobs               body: ReviewRequest   -> ReviewJob     (202; doğrulama hatası 400 ApiError)
  *   GET  /api/jobs/:id                                 -> ReviewJob     (arayüz ~400 ms aralıkla sorgular)
