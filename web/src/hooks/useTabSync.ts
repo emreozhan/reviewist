@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import type { ReviewModel } from '../../../src/shared/types';
 import { crumbFor, tabLabelFor } from '../lib/navTarget';
 import type { ReviewIndex } from '../lib/reviewIndex';
+import { storageKey } from '../lib/persistence';
+import { rememberReviewKeys } from '../lib/reviewKeys';
 import { tabKey } from '../lib/tabs';
 import { useProgress } from '../state/progressStore';
 import { tabsStorageKey, useTabs } from '../state/tabsStore';
@@ -15,7 +17,10 @@ import { useUi } from '../state/uiStore';
  */
 export function useTabSync(review: ReviewModel, index: ReviewIndex): void {
   useEffect(() => {
-    useTabs.getState().init(tabsStorageKey(review.source.stableKey || review.id), (p) => index.fileById.has(p));
+    const tabsKey = tabsStorageKey(review.source.stableKey || review.id);
+    useTabs.getState().init(tabsKey, (p) => index.fileById.has(p));
+    // Silme sırasında temizlenebilsin diye bu incelemenin kayıt anahtarları not edilir.
+    rememberReviewKeys(review.id, { progress: storageKey(review), tabs: tabsKey });
 
     const reconcile = () => {
       const ui = useUi.getState();
@@ -45,7 +50,9 @@ export function useTabSync(review: ReviewModel, index: ReviewIndex): void {
     const unsubProgress = useProgress.subscribe((s, prev) => {
       if (s.key !== prev.key) return;
       const tabs = useTabs.getState();
-      for (const k of Object.keys(s.seen)) if (s.seen[k] !== prev.seen[k]) tabs.pinPath(k);
+      // Başka sekmeden gelen güncelleme (storage olayı) burada sekme sabitlemez: yalnız kullanıcının kendi yazımı.
+      if (s.stored === prev.stored || s.origin !== 'local') return;
+      for (const k of new Set([...Object.keys(s.seen), ...Object.keys(prev.seen)])) if (!!s.seen[k] !== !!prev.seen[k]) tabs.pinPath(k);
       for (const k of Object.keys(s.notes)) {
         if (s.notes[k] === prev.notes[k]) continue;
         if (k.startsWith('file:')) tabs.pinPath(k.slice(5));

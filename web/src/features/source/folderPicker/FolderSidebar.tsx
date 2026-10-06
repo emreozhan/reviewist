@@ -33,7 +33,7 @@ export function FolderSidebar({ roots, recent, current, onGo, onRecent }: Folder
       </ul>
       <h3 className="fp-side__title">Son kullanılan repolar</h3>
       {recent.length === 0 ? (
-        <p className="fp-side__empty">Başarılı analizlerin repoları burada listelenir.</p>
+        <p className="fp-side__empty">Başarılı analizlerin depoları burada listelenir.</p>
       ) : (
         <ul className="fp-side__list">
           {recent.map((p) => (

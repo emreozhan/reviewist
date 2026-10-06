@@ -4,6 +4,7 @@
  */
 import { structuredPatch } from 'diff';
 import type { ChangeSet, ChangeSetFile, DiffHunk, DiffLine, FileStatus, ReviewSourceInfo } from '../../shared/types.js';
+import { compareStrings } from '../compare.js';
 
 export interface MemoryChangeSetInput {
   /** Taban (eski) taraftaki değişen dosyalar: yol → içerik. */
@@ -84,7 +85,7 @@ export function createMemoryChangeSet(input: MemoryChangeSetInput): ChangeSet {
     if (path in input.new || renameSources.has(path)) continue;
     files.push(makeFile(path, 'deleted', undefined, oldText, ''));
   }
-  files.sort((a, b) => a.path.localeCompare(b.path));
+  files.sort((a, b) => compareStrings(a.path, b.path));
 
   const oldSide = new Map<string, string>();
   const newSide = new Map<string, string>();

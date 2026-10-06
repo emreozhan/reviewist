@@ -80,7 +80,7 @@ export function RefSelectPopover({ value, refs, loading, emptyOption, onPick, on
         />
       </div>
       {rows.length === 0 ? (
-        <p className="refsel__empty">{loading ? 'Dallar yükleniyor…' : refs ? 'Bu repoda ref bulunamadı.' : 'Dallar okunamadı; ref adını yazabilirsiniz.'}</p>
+        <p className="refsel__empty">{loading ? 'Dallar yükleniyor…' : refs ? 'Bu depoda ref bulunamadı.' : 'Dallar okunamadı; ref adını yazabilirsiniz.'}</p>
       ) : (
         <ul ref={listRef} id={listId} className="refsel__list" role="listbox" aria-label="Ref'ler">
           {rows.map((r, i) => {

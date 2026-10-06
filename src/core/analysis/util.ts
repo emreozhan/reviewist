@@ -3,6 +3,7 @@
  * eşzamanlılık sınırlı map, diff satır kümeleri.
  */
 import type { DiffHunk, RiskInfo, RiskLevel, RiskReason } from '../../shared/types.js';
+import { ID_PART_CHARS, IDENT, UPPER_START_RE } from '../java/names.js';
 
 export const RISK_LEVEL_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
 
@@ -70,10 +71,13 @@ export function dirname(path: string): string {
   return i >= 0 ? path.slice(0, i) : '';
 }
 
+const ANNOTATION_QUALIFIED_RE = new RegExp(`^[${ID_PART_CHARS}.]+`, 'u');
+const ANNOTATION_RE = new RegExp(`@(${IDENT}(?:\\.${IDENT})*)`, 'gu');
+
 /** Anotasyon metninden ad: '@org.x.Transactional(readOnly = true)' → 'Transactional'. */
 export function annotationName(annotation: string): string {
   const s = annotation.trim().replace(/^@/, '');
-  const m = /^[\w.$]+/.exec(s);
+  const m = ANNOTATION_QUALIFIED_RE.exec(s);
   const full = m ? m[0] : s;
   return simpleTypeName(full);
 }
@@ -83,14 +87,68 @@ export function annotationName(annotation: string): string {
  * Boşluklar normalize edilir. '@interface' ve küçük harfle başlayan (e-posta vb.) eşleşmeler atlanır.
  */
 export function extractAnnotations(text: string): string[] {
+  return extractAnnotationsFrom(text, text);
+}
+
+/**
+ * Yorumları ve string/char/text block literallerini aynı uzunlukta boşlukla değiştirir (satır sonları korunur).
+ * Konumlar değişmez; ham metinden dilimleme için kullanılabilir. Doğrusal tek geçiş.
+ */
+export function maskCommentsAndStrings(text: string): string {
+  let out = '';
+  let last = 0;
+  let i = 0;
+  const blank = (s: number, e: number): void => {
+    out += text.slice(last, s) + text.slice(s, e).replace(/[^\r\n]/g, ' ');
+    last = e;
+  };
+  while (i < text.length) {
+    const c = text[i];
+    if (c === '/' && text[i + 1] === '/') {
+      const nl = text.indexOf('\n', i);
+      const e = nl < 0 ? text.length : nl;
+      blank(i, e);
+      i = e;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2);
+      const e = end < 0 ? text.length : end + 2;
+      blank(i, e);
+      i = e;
+    } else if (c === '"' && text.startsWith('"""', i)) {
+      let k = i + 3;
+      while (k < text.length && !text.startsWith('"""', k)) k += text[k] === '\\' ? 2 : 1;
+      const e = Math.min(text.length, k + 3);
+      blank(i, e);
+      i = e;
+    } else if (c === '"' || c === "'") {
+      let k = i + 1;
+      while (k < text.length && text[k] !== c && text[k] !== '\n') k += text[k] === '\\' ? 2 : 1;
+      const e = Math.min(text.length, k + 1);
+      blank(i, e);
+      i = e;
+    } else i++;
+  }
+  return out + text.slice(last);
+}
+
+/**
+ * Kod içindeki anotasyonlar: yorum ve string literal içindeki `@Ad` metinleri anotasyon sayılmaz
+ * (`// @Async kaldırıldı`, `"@Query"`). Argümanlar ham metinden alınır (`@Query("select ...")`).
+ */
+export function extractCodeAnnotations(text: string): string[] {
+  return extractAnnotationsFrom(text, maskCommentsAndStrings(text));
+}
+
+/** `scan` (aynı uzunlukta, maskeli olabilir) üzerinde arar; argüman metnini `text`ten dilimler. */
+function extractAnnotationsFrom(text: string, scan: string): string[] {
   const out: string[] = [];
-  const re = /@([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)/g;
+  const re = new RegExp(ANNOTATION_RE.source, ANNOTATION_RE.flags);
   let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(scan)) !== null) {
     const qualified = m[1];
     if (qualified === 'interface') continue;
     const name = simpleTypeName(qualified);
-    if (!/^[A-Z]/.test(name)) continue;
+    if (!UPPER_START_RE.test(name)) continue;
     let end = re.lastIndex;
     let j = end;
     while (j < text.length && (text[j] === ' ' || text[j] === '\t')) j++;

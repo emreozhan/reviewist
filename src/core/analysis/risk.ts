@@ -10,7 +10,9 @@
  */
 import type { CallRef, FileChange, MemberChange, RiskInfo, RiskReason, TypeKind } from '../../shared/types.js';
 import type { JavaMember, JavaType, MemberDiff, TypeDiff, Visibility } from '../java/model.js';
-import { annotationName, basename, countMatches, extractAnnotations, makeRisk, simpleTypeName } from './util.js';
+import { ID_PART_CHARS, IDENT } from '../java/names.js';
+import { isRecordComponent } from './fieldUsage.js';
+import { annotationName, basename, countMatches, extractCodeAnnotations, makeRisk, simpleTypeName } from './util.js';
 
 export const RISK_WEIGHTS = {
   /** Silinmiş/yeniden adlandırılmış/arity'si değişmiş üye head'de hâlâ eski haliyle çağrılıyor: taban + çağrı başına (en fazla 4) */
@@ -159,7 +161,8 @@ export interface AnnotationChange {
 }
 
 function annotationMultiset(text: string | undefined, declared: readonly string[]): Map<string, number> {
-  const found = extractAnnotations(text ?? '');
+  // Gövde/parametre anotasyonları yalnız kod kısmından (yorum ve string literal dışı); bildirim anotasyonları ayrıştırıcıdan.
+  const found = extractCodeAnnotations(text ?? '');
   const names = new Set(found.map(annotationName));
   for (const d of declared) if (!names.has(annotationName(d))) found.push(`@${annotationName(d)}${d.slice(d.indexOf('(') >= 0 ? d.indexOf('(') : d.length).replace(/\s+/g, ' ')}`);
   const out = new Map<string, number>();
@@ -253,6 +256,42 @@ export interface MemberRiskInput {
   hookNames?: ReadonlySet<string>;
   /** Bu üyeye bağlı yeni mimari ihlaller. */
   architecture?: readonly ArchitectureIssue[];
+  /**
+   * Dosyanın eski ya da yeni tarafı ayrıştırma hatası içeriyor: silinme/ad değişikliği ayrıştırma hatasından kaynaklanıyor
+   * olabilir. Silinme kaynaklı nedenler "doğrulanamadı" olarak işaretlenir ve küçük ağırlıkla sayılır.
+   */
+  parseUncertain?: boolean;
+}
+
+/** Ayrıştırma hatalı dosyada silinme/ad değişikliğinden türeyen ve doğrulanamayan risk kodları. */
+export const PARSE_UNVERIFIABLE_CODES: ReadonlySet<string> = new Set([
+  'removed-with-callers',
+  'public-api-removed',
+  'public-api-renamed',
+  'override-broken',
+  'override-orphaned',
+  'interface-contract',
+  'removed',
+  'renamed',
+  'moved',
+  'type-removed',
+  'type-renamed',
+]);
+
+/** Silinme kaynaklı durumlar (ayrıştırma hatasında doğrulanamaz). */
+export function isRemovalStatus(status: string): boolean {
+  return status === 'removed' || status === 'renamed' || status === 'moved';
+}
+
+export const PARSE_UNVERIFIED_NOTE = 'doğrulanamadı: dosya tam ayrıştırılamadı, silinme ayrıştırma hatasından kaynaklanıyor olabilir';
+
+/** Doğrulanamayan nedenleri bilgi düzeyine indirir: ağırlık dörtte bire, iletiye not. */
+function markParseUncertain(reasons: RiskReason[]): void {
+  for (const r of reasons) {
+    if (!PARSE_UNVERIFIABLE_CODES.has(r.code)) continue;
+    r.weight = Math.round(r.weight / 4);
+    r.message = `${r.message} (${PARSE_UNVERIFIED_NOTE})`;
+  }
 }
 
 export interface ArchitectureIssue {
@@ -302,7 +341,8 @@ function isAbstractMember(m: JavaMember | undefined, ownerKind: TypeKind): boole
   return false;
 }
 
-const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+const IDENT_RE = new RegExp(IDENT, 'gu');
+const ACCESSOR_RE = new RegExp(`^(?:get|is)(\\p{Lu}[${ID_PART_CHARS}]*)$`, 'u');
 
 /** Metin içinde geçen, sahip tipin alanı olan adlar. */
 function referencedFields(text: string, fields: ReadonlySet<string>): Set<string> {
@@ -311,7 +351,7 @@ function referencedFields(text: string, fields: ReadonlySet<string>): Set<string
     const id = m[0];
     if (fields.has(id)) out.add(id);
     // Erişimci çağrısı (getObject() / isEnabled()) ilgili alana referans sayılır.
-    const acc = /^(?:get|is)([A-Z][\w$]*)$/.exec(id);
+    const acc = ACCESSOR_RE.exec(id);
     if (acc) {
       const field = acc[1].charAt(0).toLowerCase() + acc[1].slice(1);
       if (fields.has(field)) out.add(field);
@@ -346,10 +386,12 @@ const CONCURRENCY_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [
   { re: /\bConcurrentHashMap\b|\bCopyOnWrite\w+/, label: 'eşzamanlı koleksiyon' },
 ];
 
-const SQL_LITERAL_RE = /"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"/g;
+// Kapanış tırnağı isteğe bağlı: kapanmayan literal satır sonuna kadar tek eşleşme olur, her tırnaktan yeniden
+// tarama (ikinci dereceden geri izleme) yapılmaz.
+const SQL_LITERAL_RE = /"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"?/g;
 const SQL_KEYWORD_RE = /\b(SELECT|INSERT|UPDATE|DELETE|MERGE|FROM|WHERE|JOIN)\b/i;
 
-function sqlLiterals(text: string | undefined): string[] {
+export function sqlLiterals(text: string | undefined): string[] {
   if (!text) return [];
   const out: string[] = [];
   for (const m of text.match(SQL_LITERAL_RE) ?? []) {
@@ -377,16 +419,22 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
   const add = (code: string, message: string, weight: number) => reasons.push({ code, message, weight });
   const oldM = md.oldMember;
   const newM = md.newMember;
-  const oldVis = oldM?.visibility ?? ch.visibility;
-  const api = isApiVisible(oldVis, input.ownerVisibility, ownerKind) || isApiVisible(ch.visibility, input.ownerVisibility, ownerKind);
+  // Record bileşeni public API'dir (erişimci metot + kanonik yapıcı parametresi); alanın kendisi private olsa da.
+  const component = isRecordComponent(oldM ?? newM, ownerKind);
+  const oldVis = component ? 'public' : (oldM?.visibility ?? ch.visibility);
+  const newVis = component ? 'public' : ch.visibility;
+  const api = isApiVisible(oldVis, input.ownerVisibility, ownerKind) || isApiVisible(newVis, input.ownerVisibility, ownerKind);
   const isMethod = ch.kind === 'method' || ch.kind === 'constructor';
+  const isFieldLike = ch.kind === 'field' || ch.kind === 'enumConstant';
 
   // Silinmiş/değişmiş ama çağrılıyor: yalnız 'exact' tam ağırlık; yalnız 'likely' varsa yarım ağırlık; name-only sayılmaz.
   const stale = input.staleCalls.filter((c) => c.confidence !== 'name-only');
   if (stale.length > 0) {
     const n = stale.length;
     const exact = stale.some((c) => c.confidence === 'exact');
-    const verb = status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : 'İmzası değişti';
+    const verb =
+      status === 'removed' ? 'Silindi' : status === 'renamed' ? 'Yeniden adlandırıldı' : status === 'moved' ? 'Taşındı' : status === 'added' ? 'Eklendi' : 'İmzası değişti';
+    const what = component ? 'eski haliyle (erişimci/kanonik yapıcı) kullanılıyor' : isFieldLike ? 'eski adıyla kullanılıyor' : 'eski haliyle çağrılıyor';
     const typeHint =
       status === 'signatureChanged' && oldM && newM && oldM.name === newM.name && oldM.params.length === newM.params.length
         ? '; argüman tipleri yeni parametre tipleriyle uyuşmuyor gibi görünüyor'
@@ -395,8 +443,8 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
     add(
       'removed-with-callers',
       exact
-        ? `${verb} ama head'de hâlâ ${n} yerde eski haliyle çağrılıyor (${callSummary(stale)})${typeHint}; derleme veya çalışma zamanı hatası olası`
-        : `${verb}; head'de ${n} yerde eski haliyle çağrılıyor olabilir (${callSummary(stale)})${typeHint}; çağrı yerleri kesin doğrulanamadı`,
+        ? `${verb} ama head'de hâlâ ${n} yerde ${what} (${callSummary(stale)})${typeHint}; derleme veya çalışma zamanı hatası olası`
+        : `${verb}; head'de ${n} yerde ${what} olabilir (${callSummary(stale)})${typeHint}; ${isFieldLike ? 'kullanım yerleri ad aramasıyla bulundu, kesin doğrulanamadı' : 'çağrı yerleri kesin doğrulanamadı'}`,
       exact ? full : Math.round(full / 2),
     );
   }
@@ -420,15 +468,15 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
     const detail = ch.oldSignature ? `: ${ch.oldSignature} → ${ch.signature}` : '';
     if (api) {
       const prot = oldVis === 'protected' && ch.visibility === 'protected';
-      add('public-api-signature', `${prot ? 'protected' : 'public'} API imzası değişti${detail}`, prot ? W.protectedApiSignature : W.publicApiSignature);
+      add('public-api-signature', `${component ? 'record bileşeni (public API) tipi' : `${prot ? 'protected' : 'public'} API imzası`} değişti${detail}`, prot ? W.protectedApiSignature : W.publicApiSignature);
     } else {
       add('signature', `İmza değişti${detail}`, W.privateSignature);
     }
   } else if (status === 'removed') {
-    if (api) add('public-api-removed', `${oldVis} üye silindi: ${oldM?.signature ?? ch.signature}`, W.publicApiRemoved);
+    if (api) add('public-api-removed', `${component ? 'record bileşeni' : `${oldVis} üye`} silindi: ${oldM?.signature ?? ch.signature}${component ? ` (erişimci ${ch.name}() ve kanonik yapıcı parametresi)` : ''}`, W.publicApiRemoved);
     else add('removed', `Üye silindi: ${oldM?.signature ?? ch.signature}`, W.privateRemoved);
   } else if (status === 'renamed') {
-    if (api) add('public-api-renamed', `${oldVis} üye yeniden adlandırıldı: ${ch.oldName ?? '?'} → ${ch.name}`, W.publicApiRenamed);
+    if (api) add('public-api-renamed', `${component ? 'record bileşeni' : `${oldVis} üye`} yeniden adlandırıldı: ${ch.oldName ?? '?'} → ${ch.name}`, W.publicApiRenamed);
     else add('renamed', `Yeniden adlandırıldı: ${ch.oldName ?? '?'} → ${ch.name}`, W.privateSignature);
   } else if (status === 'moved') {
     add('moved', `Başka tipe taşındı${ch.oldId ? ` (${shortId(ch.oldId)} → ${shortId(ch.id)})` : ''}`, api ? W.moved : Math.round(W.moved / 2));
@@ -614,6 +662,7 @@ export function scoreMember(input: MemberRiskInput): RiskInfo {
     callersReason.weight = Math.max(0, W.bodyWithCallersCap - bodyReason.weight);
   }
 
+  if (input.parseUncertain && isRemovalStatus(status)) markParseUncertain(reasons);
   addArchitecture(reasons, input.architecture);
   return finalize(reasons, input.isTest);
 }
@@ -660,6 +709,8 @@ export interface TypeRiskInput {
   importRetargets?: readonly { from: string; to: string }[];
   /** Hedef değişiminin anlam taşıyan bir pakette olup olmadığı (orta risk). */
   meaningfulImport?: (name: string) => boolean;
+  /** Dosya ayrıştırma hatası içeriyor (bkz. MemberRiskInput.parseUncertain). */
+  parseUncertain?: boolean;
 }
 
 /** Tip riski = max(tip düzeyi kurallar, en riskli üye) + diğer üyelerden küçük katkı (en fazla 10). */
@@ -683,7 +734,7 @@ export function scoreType(input: TypeRiskInput): RiskInfo {
   if (td.oldType && td.newType) {
     const oldSupers = (ch.oldSuperTypes ?? [...(td.oldType.superclass ? [td.oldType.superclass] : []), ...td.oldType.interfaces]).map(simpleTypeName).sort();
     const newSupers = ch.superTypes.map(simpleTypeName).sort();
-    // A1 'supertypes' bayrağı: basit adlar aynı kalsa da çözülmüş FQN'ler değiştiyse (başka paketteki aynı adlı tip) kalıtım değişmiştir.
+    // Semantik diff'in 'supertypes' bayrağı: basit adlar aynı kalsa da çözülmüş FQN'ler değiştiyse (başka paketteki aynı adlı tip) kalıtım değişmiştir.
     const fqnChanged =
       ch.flags.includes('supertypes') && ch.oldSuperTypes !== undefined && [...ch.oldSuperTypes].sort().join(',') !== [...ch.superTypes].sort().join(',');
     if (oldSupers.join(',') !== newSupers.join(',') || fqnChanged) {
@@ -712,6 +763,7 @@ export function scoreType(input: TypeRiskInput): RiskInfo {
       meaningful ? W.importRetargetMeaningful : W.importRetarget,
     );
   }
+  if (input.parseUncertain && isRemovalStatus(ch.status)) markParseUncertain(reasons);
   addArchitecture(reasons, input.architecture);
 
   let typeLevel = reasons.reduce((s, r) => s + r.weight, 0);

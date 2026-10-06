@@ -15,7 +15,7 @@ describe('buildMarkdown', () => {
       seen: { [PATHS.paymentGateway]: true },
       notes: { [symbolNoteKey(S.moneyEquals)]: 'hashCode da güncellenmeli', [fileNoteKey(PATHS.pom)]: 'Sürüm notlarına bak' },
     });
-    expect(md).toContain(`# Review notları: ${sampleReview.source.title}`);
+    expect(md).toContain(`# İnceleme notları: ${sampleReview.source.title}`);
     expect(md).toContain(`- İlerleme: 1/${sampleReview.files.length} dosya görüldü`);
     expect(md).toContain(`### \`${PATHS.money}\``);
     expect(md).toContain('**`Money.equals()`**');
@@ -24,6 +24,27 @@ describe('buildMarkdown', () => {
     expect(md).toContain('## Dikkat gerektiren bulgular');
     expect(md).toContain(`- [ ] \`${PATHS.stripe}\``);
     expect(md).not.toContain(`- [ ] \`${PATHS.paymentGateway}\``);
+  });
+
+  it('diff dışı sembollere ve incelemede olmayan dosyalara yazılan notlar ayrı bölümde çıkar', () => {
+    const outsideSym = 'com.acme.outside.LegacyBilling#bill(Money)';
+    expect(index.symbolFile.has(outsideSym)).toBe(false);
+    const md = buildMarkdown(sampleReview, index, {
+      seen: {},
+      notes: { [symbolNoteKey(outsideSym)]: 'çağıran da etkileniyor\nikinci satır', [fileNoteKey('src/Gone.java')]: 'eski dosya notu', [symbolNoteKey(S.moneyEquals)]: 'iç not' },
+    });
+    expect(md).not.toContain('_Henüz not yok._');
+    const outside = md.slice(md.indexOf('## Diff dışı notlar'));
+    expect(md.indexOf('## Diff dışı notlar')).toBeGreaterThan(md.indexOf('## Notlar'));
+    expect(outside).toContain('**`LegacyBilling.bill()`**');
+    expect(outside).toContain('  çağıran da etkileniyor\n  ikinci satır');
+    expect(outside).toContain('**`src/Gone.java`**');
+    expect(outside).not.toContain('iç not');
+  });
+
+  it('diff dışı not yoksa bölüm çıkmaz', () => {
+    const md = buildMarkdown(sampleReview, index, { seen: {}, notes: { [symbolNoteKey(S.moneyEquals)]: 'x' } });
+    expect(md).not.toContain('## Diff dışı notlar');
   });
 
   it('not yoksa bunu belirtir ve boş notları atlar', () => {

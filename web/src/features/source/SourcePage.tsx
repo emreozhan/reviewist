@@ -4,7 +4,7 @@ import { isApiError } from '../../lib/api';
 import { MockBadge } from '../../components/MockBadge';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import { useConfig } from '../../hooks/queries';
-import { navigate } from '../../lib/route';
+import { navigate, parseHash } from '../../lib/route';
 import { useApiMode } from '../../state/apiMode';
 import { useNotice } from '../../state/noticeStore';
 import { AnalysisProgress } from './AnalysisProgress';
@@ -14,8 +14,11 @@ import type { ServerFieldError } from './serverFieldError';
 import { formHasField } from './serverFieldError';
 import { useCreateReview } from './useCreateReview';
 
-/** initialReviewId yönlendirmesi oturumda yalnız bir kez yapılır. */
-let initialRedirectDone = false;
+/**
+ * initialReviewId yönlendirmesi oturumda (sayfa yüklemesi başına) yalnız bir kez yapılır. Sayfa doğrudan bir inceleme
+ * adresinde açıldıysa (ör. F5) yönlendirme hiç yapılmaz: logoya tıklayınca başlangıç ekranında kalınır.
+ */
+let initialRedirectDone = typeof window !== 'undefined' && parseHash(window.location.hash).name !== 'home';
 
 export function SourcePage() {
   const config = useConfig();
@@ -37,7 +40,7 @@ export function SourcePage() {
     const id = config.data?.initialReviewId;
     if (id && !initialRedirectDone) {
       initialRedirectDone = true;
-      // Review açılamazsa (404) ReviewScreen buraya bilgi notuyla geri döner.
+      // İnceleme açılamazsa (404) ReviewScreen buraya bilgi notuyla geri döner.
       useNotice.getState().markInitialAttempt(id);
       navigate({ name: 'review', id, tab: 'workspace', params: {} }, true);
     }

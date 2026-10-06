@@ -3,7 +3,7 @@ import { navigate } from '../lib/route';
 import { useApiMode } from '../state/apiMode';
 import { Modal } from './Modal';
 
-/** Sunucuya ulaşılamadığında kullanıcıya sorar: tekrar dene ya da örnek veriyle (mock) devam et. */
+/** Sunucuya ulaşılamadığında kullanıcıya sorar: tekrar dene ya da örnek veriyle devam et. */
 export function UnreachableDialog() {
   const open = useApiMode((s) => s.unreachablePrompt);
   const enableMock = useApiMode((s) => s.enableMock);
@@ -14,7 +14,8 @@ export function UnreachableDialog() {
 
   const retry = async () => {
     dismiss();
-    await queryClient.invalidateQueries();
+    // Yalnız başarısız sorgular yeniden denenir: yüklü (onlarca MB'lık) inceleme modeli yeniden indirilmez.
+    await queryClient.invalidateQueries({ predicate: (q) => q.state.status === 'error' });
   };
   const useMock = () => {
     enableMock();
@@ -37,8 +38,8 @@ export function UnreachableDialog() {
       }
     >
       <p>
-        Arayüz <code>/api</code> uçlarına bağlanamadı (beklenen adres <code>127.0.0.1:4317</code>). Sunucuyu{' '}
-        <code>npm run dev:server</code> ile başlatıp tekrar deneyebilirsiniz.
+        Arayüz <code>/api</code> uçlarına bağlanamadı (beklenen adres <code>127.0.0.1:4317</code>). Sunucuyu proje klasöründe{' '}
+        <code>node bin/reviewist.js</code> ile başlatıp tekrar deneyebilirsiniz.
       </p>
       <p className="muted">
         Örnek veri modu, hexagonal bir Java "shop" projesindeki hazır bir değişikliği gösterir. Bu modda gerçek depo okunmaz ve üst

@@ -62,5 +62,10 @@ export interface AnalysisContext {
   staleTypeRefs: Map<string, string[]>;
   /** Sembol id (üye ya da tip) → bu değişiklikle gelen mimari ihlaller (risk katkısı için). */
   architecture: Map<string, ArchitectureIssue[]>;
+  /**
+   * Silinen/yeniden adlandırılan örnek alanları (üye id): kullanımları güvenilir biçimde aranamadı (başka dosyalardaki
+   * `x.alan` erişimlerinin alıcı tipi çözülmez). Bulgu "çağıranı kalmadı" demez; elle doğrulama ister.
+   */
+  untrackedFieldUses?: Set<string>;
   warnings: string[];
 }

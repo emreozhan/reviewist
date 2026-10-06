@@ -37,8 +37,9 @@ export function langFor(language: FileChange['language']): HlLang | null {
   }
 }
 
+/** Metni HTML metni ve (tırnaklı) öznitelik değeri olarak güvenli hale getirir: & < > " ' kaçışlanır. */
 export function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 /** Tek parça kodu renklendirir (hljs çıktısı kaçışlanmış HTML'dir). */

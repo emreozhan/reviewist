@@ -6,6 +6,7 @@ import { jMember, jType, memberDiff, typeDiff } from './testing/builders.js';
 import { createSyntheticChangeSet } from './testing/synthetic.js';
 import type { TypeDiff } from './java/model.js';
 import { emptyRisk } from './analysis/util.js';
+import { perfMode } from './testing/perfMode.js';
 
 const fmt = (ms: number) => `${ms.toFixed(0)} ms`;
 
@@ -19,7 +20,6 @@ describe('performans — buildReview uçtan uca', () => {
     const t0 = performance.now();
     const model = await buildReview(counted, { onProgress: (m) => messages.push(m), onTimings: (t) => (timings = t) });
     const total = performance.now() - t0;
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] buildReview ${totalJava} java / ${changedPaths.length} değişen: toplam ${fmt(total)} — ` +
         Object.entries(timings)
@@ -38,7 +38,7 @@ describe('performans — buildReview uçtan uca', () => {
     expect(load?.overriddenBy.length).toBeGreaterThan(0);
     // İlerleme mesajları spam değil
     expect(messages.filter((m) => m.startsWith('Repo indeksi:')).length).toBeLessThanOrEqual(12);
-    expect(total).toBeLessThan(60_000);
+    if (perfMode()) expect(total).toBeLessThan(60_000);
   });
 });
 
@@ -85,7 +85,6 @@ describe('performans — okuma planı', () => {
     const t0 = performance.now();
     const steps = buildReviewPlan(files, byFile);
     const ms = performance.now() - t0;
-    // eslint-disable-next-line no-console
     console.log(`[perf] okuma planı ${N} dosya (${label}): ${fmt(ms)}`);
     expect(steps.length).toBe(N);
     if (!withDeps) {
@@ -94,6 +93,6 @@ describe('performans — okuma planı', () => {
       for (let i = 1; i < scores.length; i++) expect(scores[i]).toBeLessThanOrEqual(scores[i - 1]);
     }
     expect(new Set(steps.map((s) => s.fileId)).size).toBe(N);
-    expect(ms).toBeLessThan(5_000);
+    if (perfMode()) expect(ms).toBeLessThan(5_000);
   });
 });

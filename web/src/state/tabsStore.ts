@@ -10,6 +10,7 @@ import {
   moveTab,
   openTab,
   pinTab,
+  reconcileInDiff,
   reviveTabs,
   serializeTabs,
   stepHistory,
@@ -73,7 +74,8 @@ export const useTabs = create<TabsStore>((set, get) => {
     ...EMPTY_TABS,
     storageKey: null,
     init: (storageKey, isKnownDiffFile) => {
-      if (get().storageKey === storageKey) return;
+      // Aynı kaynak yeniden analiz edildi (aynı anahtar, yeni inceleme): bellekteki sekmeler güncel diff'e uzlaştırılır.
+      if (get().storageKey === storageKey) return apply(reconcileInDiff(pick(get()), isKnownDiffFile));
       set({ storageKey, ...load(storageKey, isKnownDiffFile) });
     },
     open: (spec, opts) => apply(openTab(pick(get()), spec, { ...opts, tick: nextTick() })),

@@ -1,5 +1,5 @@
 /**
- * Entegrasyon: fixtures/sample-repo üzerinde fixtures/EXPECTED.md beklentileri (A1 kapsamı: ayrıştırma, semantik diff, repo indeksi).
+ * Entegrasyon: fixtures/sample-repo üzerinde fixtures/EXPECTED.md beklentileri (ayrıştırma, semantik diff, repo indeksi).
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';

@@ -12,6 +12,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,6 +31,22 @@ const GIT_CONFIG = [
 const BASE_TIME = Date.UTC(2026, 0, 5, 9, 0, 0) / 1000; // 2026-01-05T09:00:00Z
 let commitIndex = 0;
 
+let emptyConfigPath;
+function emptyGitConfig() {
+  if (!emptyConfigPath) {
+    emptyConfigPath = join(tmpdir(), `reviewist-fixture-gitconfig-${process.pid}`);
+    writeFileSync(emptyConfigPath, '');
+    process.once('exit', () => {
+      try {
+        rmSync(emptyConfigPath, { force: true });
+      } catch {
+        /* geçici dosya */
+      }
+    });
+  }
+  return emptyConfigPath;
+}
+
 function gitEnv() {
   const env = { ...process.env };
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_CONFIG_PARAMETERS']) {
@@ -38,6 +55,9 @@ function gitEnv() {
   const date = `${BASE_TIME + commitIndex * 3600} +0000`;
   return {
     ...env,
+    // Kullanıcının/sistemin git yapılandırması (global gitignore, imza, autocrlf) SHA'ları değiştirmesin.
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_CONFIG_GLOBAL: emptyGitConfig(),
     GIT_AUTHOR_NAME: 'Fixture',
     GIT_AUTHOR_EMAIL: 'fixture@example.com',
     GIT_COMMITTER_NAME: 'Fixture',

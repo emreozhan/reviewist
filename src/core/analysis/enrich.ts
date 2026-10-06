@@ -6,7 +6,7 @@
  *  - Çağrı yeri head'de var olan başka bir üyeye bağlanıyorsa (`targetsOfCallSite`; ör. iç sınıfın aynı adlı metodu,
  *    başka sınıftan statik import) bayat değildir.
  *  - Head tipinde (veya üst tiplerinde) aynı ad + arity'de üye kaldıysa çağrılar ona gider; yalnız argüman tipleri
- *    kesin olarak çıkarılabilen ve kalan hiçbir aday overload'a uymayan çağrılar 'likely' bayat sayılır (B2).
+ *    kesin olarak çıkarılabilen ve kalan hiçbir aday overload'a uymayan çağrılar 'likely' bayat sayılır.
  *  - Açık yapıcısı kalmayan tipte argümansız `new X()` örtük varsayılan yapıcıya gider.
  *  - Sahip tip silindiyse eski modelin üst tipleri head'de çözülür; kalıtılan üye varsa çağrı geçerlidir.
  *  - Alıcısı çözülemeyen ('name-only') çağrılar bulgu/risk üretmez; yalnızca sayılır (ctx.unverifiedStaleCalls).
@@ -16,9 +16,10 @@
  */
 import type { CallRef } from '../../shared/types.js';
 import type { CallSite, JavaFileModel, JavaMember, JavaType, ResolvedMember, TypeDiff } from '../java/model.js';
-import { eraseTypeForId } from '../java/names.js';
+import { eraseTypeForId, identWordRegExp } from '../java/names.js';
 import { argCompatibility, inferArgType, typeVarsOf } from './argTypes.js';
 import type { AnalysisContext, AnalyzedFile } from './context.js';
+import { findStaleFieldUses, findStaleRecordConstructorCalls } from './fieldUsage.js';
 import { isSemanticChange } from './risk.js';
 import { rootOfModelId, sourceRootFor } from './symbolIds.js';
 import { annotationName, packageOf, simpleTypeName } from './util.js';
@@ -194,8 +195,10 @@ export function enrich(ctx: AnalysisContext): void {
           }
           if (semantic && md.oldMember) {
             findStale(ctx, af, td, mc.id, mc.status, md.oldMember, md.newMember);
+            findStaleFieldUses(ctx, td, mc.id, mc.status, md.oldMember, path, mine);
           }
         }
+        findStaleRecordConstructorCalls(ctx, td, mine);
 
         // Silinmiş / yeniden adlandırılmış tipe hâlâ referans var mı
         // (İç tipler dış tipleriyle birlikte taşınır; yalnızca üst düzey tipler kontrol edilir.)
@@ -289,7 +292,7 @@ function mayReferenceType(ctx: AnalysisContext, path: string, fqn: string, outer
   if (!model) return true; // bilinmiyorsa eleme yapılmaz
   const simple = simpleTypeName(fqn);
   const refs = model.typeRefs ? new Set(model.typeRefs) : undefined;
-  const mentions = (name: string) => (refs ? refs.has(name) : new RegExp(`\\b${name.replace(/\$/g, '\\$')}\\b`).test(model.normalizedCode));
+  const mentions = (name: string) => (refs ? refs.has(name) : identWordRegExp(name).test(model.normalizedCode));
   if (!mentions(simple)) return false;
   const pkg = packageOf(outerFqn ?? fqn);
   if (outerFqn) {
@@ -368,7 +371,7 @@ function findStale(ctx: AnalysisContext, af: AnalyzedFile, td: TypeDiff, id: str
         }
         stale.push(call);
       } else {
-        // Aynı arity'de overload kaldı (B2): yalnız argüman tipleri kalan adayların hiçbirine uymuyorsa bayat.
+        // Aynı arity'de overload kaldı: yalnız argüman tipleri kalan adayların hiçbirine uymuyorsa bayat.
         if (call.confidence === 'name-only') continue;
         // Çağrı sahip hiyerarşisi dışındaki bir üyeye bağlanıyorsa (ör. üst arayüz metodu başka tipte) bu üyeyle ilgisi yok.
         // (Kalan overload'u override eden alt tip üyesine bağlanması da sahip hiyerarşisidir.)

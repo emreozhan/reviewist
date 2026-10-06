@@ -12,6 +12,7 @@ import { useProgress } from '../../state/progressStore';
 import { useTabs } from '../../state/tabsStore';
 import { useReviewCtx } from '../workspace/ReviewContext';
 import { TabItem } from './TabItem';
+import { altLabel } from '../../lib/platform';
 
 type MenuState = { kind: 'all'; x: number; y: number } | { kind: 'ctx'; key: string; x: number; y: number };
 
@@ -126,7 +127,7 @@ export function TabBar() {
     const tab = tabs.find((t) => t.key === menu.key);
     if (!tab) return [];
     return [
-      { key: 'close', label: 'Kapat', hint: 'Alt+W', onSelect: () => cmd.close(tab.key) },
+      { key: 'close', label: 'Kapat', hint: `${altLabel}+W`, onSelect: () => cmd.close(tab.key) },
       { key: 'others', label: 'Diğerlerini kapat', disabled: tabs.length < 2, onSelect: () => cmd.closeOthers(tab.key) },
       { key: 'pin', label: 'Sekmeyi sabitle', disabled: !tab.preview, onSelect: () => useTabs.getState().pin(tab.key) },
     ];

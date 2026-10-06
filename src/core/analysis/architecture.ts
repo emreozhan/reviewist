@@ -1,5 +1,5 @@
 /**
- * Hexagonal mimari ve Spring kuralları (Harry java-dev skill'i):
+ * Hexagonal mimari (ports & adapters) ve Spring kuralları:
  *  - domain hiçbir dış katmana ve framework'e (Spring/JPA/Jackson) bağımlı olamaz
  *  - application/port içinde framework anotasyonu yasak; application adapter'a bağımlı olamaz
  *  - adapter'lar birbirini bilemez
@@ -10,6 +10,7 @@
  */
 import type { Finding, Layer } from '../../shared/types.js';
 import type { JavaFileModel, JavaMember, JavaType } from '../java/model.js';
+import { UPPER_START_RE } from '../java/names.js';
 import { detectLayer } from './layers.js';
 import { annotationName, packageOf, simpleTypeName } from './util.js';
 
@@ -72,7 +73,7 @@ function importLayer(name: string, deps: ArchitectureDeps): Layer {
   if (t && path) {
     return detectLayer({ path, packageName: packageOf(name), annotations: t.annotations, typeKind: t.kind, typeName: t.name, hexagonal: deps.hexagonal });
   }
-  return detectLayer({ path: 'X.java', packageName: /^[A-Z]/.test(simpleTypeName(name)) ? packageOf(name) : name, hexagonal: deps.hexagonal });
+  return detectLayer({ path: 'X.java', packageName: UPPER_START_RE.test(simpleTypeName(name)) ? packageOf(name) : name, hexagonal: deps.hexagonal });
 }
 
 /** 'com.acme.adapter.out.persistence.X' → 'com.acme.adapter.out.persistence' (adapter + 2 segment). */

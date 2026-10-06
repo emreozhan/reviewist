@@ -3,6 +3,7 @@ import type { ImpactNodeStatus } from '../../../src/shared/types';
 import { linkProps, useCodeNav, intentLinkProps } from '../hooks/useCodeNav';
 import { useSymbolOpener } from '../hooks/useSymbolOpener';
 import { StatusGlyph } from './StatusGlyph';
+import { BG_CLICK } from '../lib/openIntent';
 
 interface SymbolLinkProps {
   id: string;
@@ -31,7 +32,7 @@ export function SymbolLink({ id, label, status, hint, detail, className, mode = 
     <button
       type="button"
       className={`slink${className ? ` ${className}` : ''}`}
-      title={mode === 'tab' ? `${label} — sınıfını sekmede aç (Ctrl+tık: arka planda)` : `${label} — gözat (Shift+tık: sekmede aç · Ctrl+tık: arka plan sekmesi)`}
+      title={mode === 'tab' ? `${label} — sınıfını sekmede aç (${BG_CLICK}: arka planda)` : `${label} — pencerede aç (Shift+tık: sekmede aç · ${BG_CLICK}: arka plan sekmesi)`}
       {...props}
     >
       {status && <StatusGlyph status={status} size="sm" />}

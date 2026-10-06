@@ -8,8 +8,9 @@
  * Bir dosyanın analizi patlarsa review patlamaz: FileChange.parseError + warnings.
  */
 import { randomUUID } from 'node:crypto';
-import type { ChangeSet, ChangeSetFile, FileChange, Finding, ReviewModel, TypeChange } from '../shared/types.js';
+import type { ChangeSet, ChangeSetFile, FileChange, Finding, MemberChange, ReviewModel, TypeChange } from '../shared/types.js';
 import { detectCrossFileMoves, diffJavaFile, parseJavaFiles, RepoIndex } from './java/index.js';
+import { ID_PART_CHARS, ID_START_CHARS, identWordRegExp } from './java/names.js';
 import type { JavaFileModel, ParseItem, RepoIndexApi, TypeDiff } from './java/index.js';
 import { checkArchitecture } from './analysis/architecture.js';
 import type { AnalysisContext, AnalyzedFile } from './analysis/context.js';
@@ -21,7 +22,7 @@ import { buildGraph } from './analysis/graph.js';
 import { buildGroups } from './analysis/grouping.js';
 import { createModuleResolver, detectLanguage, detectLayer, isHexagonalRepo, isTestPath } from './analysis/layers.js';
 import { buildReviewPlan } from './analysis/reviewPlan.js';
-import { isBreakingSignature, isSemanticChange } from './analysis/risk.js';
+import { isBreakingSignature, isRemovalStatus, isSemanticChange } from './analysis/risk.js';
 import { assignLayers, scoreAll } from './analysis/scoring.js';
 import { assignUniqueIds, sourceRootFor, type SymbolIds } from './analysis/symbolIds.js';
 import { TestLocator, testFindings } from './analysis/testMapping.js';
@@ -34,14 +35,14 @@ export interface BuildReviewOptions {
   /** Aşama süreleri (ms): readChanged, parseChanged, indexParse, indexBuild, enrich, riskAndTests, planGraphFindings, total. Ölçüm/log için. */
   onTimings?: (timings: Readonly<Record<string, number>>) => void;
   /**
-   * (Tur 4) Analiz artefaktları hazır olunca (repo indeksi kurulduktan sonra, model dönmeden önce) çağrılır.
+   * Analiz artefaktları hazır olunca (repo indeksi kurulduktan sonra, model dönmeden önce) çağrılır.
    * Kod gezinme uçları (outline/locate) için sunucu bunları saklar.
    */
   onArtifacts?: (artifacts: ReviewArtifacts) => void;
 }
 
 /**
- * (Tur 4) Review başına analiz artefaktları: kod gezinme (outline/locate) bunlarla ReviewModel id'leriyle aynı biçimde
+ * Review başına analiz artefaktları: kod gezinme (outline/locate) bunlarla ReviewModel id'leriyle aynı biçimde
  * id üretir. Modeller ayrıştırma önbelleğiyle paylaşılır: DEĞİŞTİRİLMEMELİDİR.
  */
 export interface ReviewArtifacts {
@@ -51,7 +52,7 @@ export interface ReviewArtifacts {
   newFiles: ReadonlyMap<string, JavaFileModel>;
   /** Değişen Java dosyalarının base modelleri (eski yol → model). */
   oldFiles: ReadonlyMap<string, JavaFileModel>;
-  /** Model id ↔ indeks id (B3 '@kök' soneki). */
+  /** Model id ↔ indeks id (çift FQN'de '@kök' soneki). */
   ids: SymbolIds;
 }
 
@@ -105,12 +106,46 @@ async function safeRead(cs: ChangeSet, side: 'old' | 'new', path: string): Promi
   }
 }
 
+/** Kapanış parantezinden sonra izin verilen kuyruk: boşluk, isteğe bağlı `throws A, b.C`, isteğe bağlı `{`. */
+const THROWS_LIST_RE = new RegExp(`^[${ID_PART_CHARS}.,\\s]*$`, 'u');
+const ID_START_ONE = new RegExp(`[${ID_START_CHARS}]`, 'u');
+const ID_PART_ONE = new RegExp(`[${ID_PART_CHARS}]`, 'u');
+
+function tailOk(tail: string): boolean {
+  let t = tail.trim();
+  if (t.endsWith('{')) t = t.slice(0, -1).trimEnd();
+  if (t === '') return true;
+  return t.startsWith('throws ') && t.length > 7 && THROWS_LIST_RE.test(t.slice(7));
+}
+
+/**
+ * Hunk başlığındaki (tek satır) metot adı: `ad(...)` ve ardından yalnız `throws ...` / `{` gelen en soldaki çağrı
+ * biçimi. Doğrusal tarama (tek düzenli ifadeyle yazıldığında `a(a(a(...)x` gibi satırlarda ikinci dereceden sürer).
+ */
+export function methodNameFromHunkHeader(header: string): string | undefined {
+  const s = header.trim();
+  const last = s.lastIndexOf(')');
+  // `[^)]*\)?` en fazla bir ')' geçebilir: aday '(' sondan ikinci ')' sonrasında olmalı.
+  const from = last >= 0 ? s.lastIndexOf(')', last - 1) + 1 : 0;
+  const lastTailOk = last < 0 || tailOk(s.slice(last + 1));
+  for (let p = s.indexOf('(', from); p >= 0; p = s.indexOf('(', p + 1)) {
+    if (p < last && !lastTailOk) continue;
+    let e = p;
+    while (e > 0 && /\s/.test(s[e - 1] as string)) e--;
+    let st = e;
+    while (st > 0 && ID_PART_ONE.test(s[st - 1] as string)) st--;
+    while (st < e && !ID_START_ONE.test(s[st] as string)) st++;
+    if (st < e) return s.slice(st, e);
+  }
+  return undefined;
+}
+
 /** Hunk başlıklarından (@@ ... @@ sonrası bağlam) metot adlarını çıkarır. */
 function methodsFromHunkHeaders(csf: ChangeSetFile): string[] {
   const names = new Set<string>();
   for (const h of csf.hunks) {
-    const m = /(\w+)\s*\([^)]*\)?\s*(?:throws [\w.,\s]+)?\{?\s*$/.exec(h.header.trim());
-    if (m && !['if', 'for', 'while', 'switch', 'catch', 'synchronized', 'return'].includes(m[1])) names.add(m[1]);
+    const name = methodNameFromHunkHeader(h.header);
+    if (name && !['if', 'for', 'while', 'switch', 'catch', 'synchronized', 'return'].includes(name)) names.add(name);
   }
   return [...names];
 }
@@ -150,7 +185,7 @@ async function safeBlobId(cs: ChangeSet, side: 'old' | 'new', path: string): Pro
 }
 
 /**
- * Dosyaları işçi havuzu + blob SHA önbelleğiyle ayrıştırır (A1 parseJavaFiles). Havuz tek dosyanın hatasında tüm çağrıyı
+ * Dosyaları işçi havuzu + blob SHA önbelleğiyle ayrıştırır (parseJavaFiles). Havuz tek dosyanın hatasında tüm çağrıyı
  * düşürdüğünden, hata olursa dosya dosya yeniden denenir; böylece yalnız sorunlu dosya Error olarak döner.
  */
 async function parseAll(items: ParseItem[], onProgress?: (done: number, total: number) => void): Promise<Parsed[]> {
@@ -222,7 +257,7 @@ function analyzeJavaFile(af: AnalyzedFile, oldParsed: Parsed | undefined, newPar
     return;
   }
   try {
-    // B7: git'in yeniden adlandırma dediği dosyada tek üst düzey tip eşiğe bakılmadan 'renamed' eşlenir (A1 seçeneği).
+    // Git'in yeniden adlandırma dediği dosyada tek üst düzey tip eşiğe bakılmadan 'renamed' eşlenir (diffJavaFile fileRenamed seçeneği).
     af.typeDiffs = diffJavaFile(af.oldModel, af.newModel, { oldPath, newPath: csf.path, fileRenamed: csf.status === 'renamed' });
     for (const td of af.typeDiffs) td.change.file = csf.path;
   } catch (error) {
@@ -404,7 +439,7 @@ async function analyzeStructure(
   } catch (error) {
     warnings.push(`Dosyalar arası taşıma tespiti başarısız (${errorMessage(error)})`);
   }
-  // B3: aynı FQN farklı kaynak köklerindeki dosyalardan geliyorsa model id'leri '@kök' ile ayrılır.
+  // Aynı FQN farklı kaynak köklerindeki dosyalardan geliyorsa model id'leri '@kök' ile ayrılır.
   let rootLookup: (path: string) => string | undefined = (path) => {
     const model = byPath.get(path)?.newModel;
     return model ? sourceRootFor(path, model.packageName) : undefined;
@@ -440,7 +475,7 @@ function artifactsOf(st: Structure): ReviewArtifacts {
 }
 
 /**
- * (Tur 4) Yalnız artefaktları kurar (ReviewModel üretmeden): bellekten düşmüş bir review için outline/locate
+ * Yalnız artefaktları kurar (ReviewModel üretmeden): bellekten düşmüş bir review için outline/locate
  * istendiğinde. Ayrıştırma blob SHA önbelleğinden geldiğinden tam analizden ucuzdur; id'ler aynı ChangeSet için
  * buildReview ile aynıdır (aynı maxIndexFiles verilmelidir).
  */
@@ -603,6 +638,14 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
     allDiffs.flatMap((td) => td.members).filter((m) => isBreakingSignature(m.change) || m.change.status === 'removed' || m.change.status === 'renamed' || m.change.status === 'added').map((m) => m.change.id),
   );
   for (const af of files) {
+    // Ayrıştırma hatalı dosyada (eski ya da yeni taraf) silinme kaynaklı bulgular doğrulanamaz.
+    const parseUncertain = !!(af.oldModel?.hasErrors || af.newModel?.hasErrors);
+    if (parseUncertain) {
+      const removed = af.typeDiffs.flatMap((td) => [td.change, ...td.members.map((m) => m.change)]).filter((c) => isRemovalStatus(c.status)).length;
+      if (removed > 0) {
+        warnings.push(`${af.file.path}: ayrıştırma hatası nedeniyle silinmiş/yeniden adlandırılmış görünen ${removed} sembol doğrulanamadı; risk tam ağırlıkla sayılmadı`);
+      }
+    }
     for (const td of af.typeDiffs) {
       for (const md of td.members) {
         const mc = md.change;
@@ -615,10 +658,12 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
             staleCalls: ctx.staleCalls.get(mc.id) ?? [],
             outsideCallers: outsideCallerIds(ctx, mc.callers, 'exact').length,
             followsChangedContract: mc.overrides.some((o) => contractChanged.has(o)),
+            fieldUsage: fieldUsageOf(ctx, mc, td),
+            parseUncertain,
           }),
         );
       }
-      findings.push(...typeFindings(td.change, af.file));
+      findings.push(...typeFindings(td.change, af.file, parseUncertain));
     }
     findings.push(...fileFindings(af.file));
   }
@@ -655,14 +700,24 @@ export async function buildReview(cs: ChangeSet, opts: BuildReviewOptions = {}):
   };
 }
 
+/** Alan/enum sabiti/record bileşeni için kullanım araması durumu (bkz. MemberFindingInput.fieldUsage). */
+function fieldUsageOf(ctx: AnalysisContext, mc: MemberChange, td: TypeDiff): 'tracked' | 'untracked' | undefined {
+  if (mc.kind !== 'field' && mc.kind !== 'enumConstant') return undefined;
+  if (ctx.untrackedFieldUses?.has(mc.id)) return 'untracked';
+  const m = td.members.find((x) => x.change === mc);
+  const old = m?.oldMember;
+  // Kullanım araması yalnız silinen/yeniden adlandırılan/taşınan alanlarda yapılır.
+  return old && (mc.status === 'removed' || mc.status === 'renamed' || mc.status === 'moved') ? 'tracked' : undefined;
+}
+
 /**
- * B5: aynı basit adın import hedefi değiştiyse (javax → jakarta) adı kullanan tiplere ayrıntı eklenir; değişmemiş/kozmetik
+ * Aynı basit adın import hedefi değiştiyse (javax → jakarta) adı kullanan tiplere ayrıntı eklenir; değişmemiş/kozmetik
  * görünen tip 'modified' sayılır (anlam değişti) ve risk için ctx.importRetargets doldurulur.
  */
 function applyImportRetargets(ctx: AnalysisContext, af: AnalyzedFile, retargets: readonly ImportRetarget[]): void {
   if (retargets.length === 0) return;
   const top = af.typeDiffs.filter((td) => td.newType && !td.newType.outerFqn);
-  const uses = (td: TypeDiff, r: ImportRetarget) => r.name === '*' || new RegExp(`\\b${r.name.replace(/\$/g, '\\$')}\\b`).test(td.newType?.normalizedText ?? '');
+  const uses = (td: TypeDiff, r: ImportRetarget) => r.name === '*' || identWordRegExp(r.name).test(td.newType?.normalizedText ?? '');
   for (const td of af.typeDiffs) {
     if (!td.newType) continue;
     const mine = retargets.filter((r) => uses(td, r));

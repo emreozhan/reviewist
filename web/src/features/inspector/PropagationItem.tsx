@@ -6,6 +6,7 @@ import { CONFIDENCE_LABEL } from '../../lib/labels';
 import type { PropItem } from '../../lib/propagation';
 import { baseName } from '../../lib/reviewIndex';
 import { ExternalPreview } from './ExternalPreview';
+import { BG_CLICK } from '../../lib/openIntent';
 
 /**
  * Yayılım öğesi (çağıran, çağrılan, override, alt tip): tıklayınca sembol orta panelin önünde gözatma penceresinde
@@ -36,7 +37,7 @@ export function PropagationItem({ item, isCall }: { item: PropItem; isCall: bool
         <button
           type="button"
           className="pitem__btn"
-          title={`${isCall ? 'Çağrı satırına' : 'Koduna'} gözat${item.inDiff ? '' : ' (diff dışı, değişmedi)'} — Shift+tık: sekmede aç · Ctrl+tık: arka plan sekmesi`}
+          title={`${isCall ? 'Çağrı satırını' : 'Kodunu'} pencerede aç${item.inDiff ? '' : ' (diff dışı, değişmedi)'} — Shift+tık: sekmede aç · ${BG_CLICK}: arka plan sekmesi`}
           {...link}
         >
           {item.status ? <StatusGlyph status={item.inDiff ? item.status : 'impacted'} size="sm" /> : <span className="pitem__dot" aria-hidden="true" />}

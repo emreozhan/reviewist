@@ -45,7 +45,7 @@ export function useRouteSelectionSync(review: ReviewModel, index: ReviewIndex, t
   useEffect(() => {
     if (applied.current) return;
     applied.current = true;
-    useProgress.getState().init(storageKey(review), legacyStorageKey(review));
+    useProgress.getState().init(storageKey(review), legacyStorageKey(review), Object.fromEntries(index.fingerprintByFile));
     const ui = useUi.getState();
     ui.resetForReview(review.id);
     if (params.layout) ui.setDiffLayout(params.layout);

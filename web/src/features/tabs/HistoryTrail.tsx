@@ -3,6 +3,7 @@ import { useCodeNav } from '../../hooks/useCodeNav';
 import { baseName } from '../../lib/reviewIndex';
 import { breadcrumb } from '../../lib/tabs';
 import { useTabs } from '../../state/tabsStore';
+import { altLabel } from '../../lib/platform';
 
 /** Gösterilen en fazla geçmiş adımı (imlecin gerisinde). */
 const MAX_CRUMBS = 6;
@@ -20,10 +21,10 @@ export function HistoryTrail() {
 
   return (
     <div className="trail">
-      <button type="button" className="icon-btn icon-btn--sm" onClick={nav.back} disabled={cursor <= 0} aria-label="Geri" title="Geri (Alt+←)">
+      <button type="button" className="icon-btn icon-btn--sm" onClick={nav.back} disabled={cursor <= 0} aria-label="Geri" title={`Geri (${altLabel}+←)`}>
         <Icon name="arrowLeft" />
       </button>
-      <button type="button" className="icon-btn icon-btn--sm" onClick={nav.forward} disabled={cursor >= history.length - 1} aria-label="İleri" title="İleri (Alt+→)">
+      <button type="button" className="icon-btn icon-btn--sm" onClick={nav.forward} disabled={cursor >= history.length - 1} aria-label="İleri" title={`İleri (${altLabel}+→)`}>
         <Icon name="arrowRight" />
       </button>
       <nav className="trail__nav" aria-label="Gezinme izi">

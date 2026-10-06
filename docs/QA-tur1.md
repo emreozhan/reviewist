@@ -1,9 +1,13 @@
-# QA turu 1 — gerçek Java repoları
+# Doğruluk ölçümü: gerçek Java depoları (QA turu 1, 2026-10-03)
 
-Repolar: spring-petclinic, commons-lang, commons-collections, guava (24 commit aralığı + 2 çalışma ağacı senaryosu).
-Klonlar ve QA betikleri: `%TEMP%\claude\C--Users-emreo-Documents-AiProjects-reviewist\7c0b2f10-349e-401c-a7ad-78dfca026e49\scratchpad\qa\`
-(`repos/`, `run.mjs`, `inspect.mjs`, `stale.mjs`, `cosmcheck.mjs`, `cosmimports.mjs`, `parseall.mjs`, `one.mjs`, `syntax/A1..A5.java`, `scenarios.sh`, `timing.sh`).
-Betikler `dist/server` modüllerini import eder: önce `npx tsc -p tsconfig.json`.
+**Durum: bu turda bulunan hataların tümü sonraki turda giderildi** (bkz. aşağıdaki tablo, "Çözüm" sütunu). Belge, ölçümün
+nasıl yapıldığını ve aracın hangi sınıflarda hata yapabildiğini göstermek için tarihsel kayıt olarak tutulur.
+
+Depolar: spring-petclinic, commons-lang, commons-collections, guava (24 commit aralığı + 2 çalışma ağacı senaryosu).
+Yöntem: her aralık için üretilen ReviewModel, `git diff` / `git grep` ile elle karşılaştırıldı; bayat çağrı, taşıma ve
+kozmetik iddiaları tek tek doğrulandı. Ölçüm betikleri depo dışında tutuldu (yeniden üretim için `npm run fixture` ve
+`node scripts/smoke.mjs` yeterlidir; gerçek depolar klonlanıp `node bin/reviewist.js <depo> --base <a> --head <b>` ile
+incelenebilir).
 
 ## Doğru çalışanlar
 - Kozmetik üye tespiti: 3466 üye, 0 yanlış pozitif. Biçim/lisans/üye sıralama commit'leri doğru ayıklanıyor.
@@ -12,22 +16,22 @@ Betikler `dist/server` modüllerini import eder: önce `npx tsc -p tsconfig.json
 
 ## Hatalar (kod, kanıt, öneri)
 
-| Kod | Önem | Konu | Sorumlu |
+| Kod | Önem | Konu | Çözüm |
 | --- | --- | --- | --- |
-| B1 | 🔴 | "Silinmiş ama hâlâ çağrılıyor" 81/81 yanlış pozitif | analysis/enrich, findings, risk; java/repoIndex findCallsTo |
-| B2 | 🔴 | Arity değişikliği aynı arity'li başka overload yüzünden gizleniyor (yanlış negatif) | analysis/enrich findStale |
-| B3 | 🔴 | Aynı FQN birden çok dosyada (guava flavor'ları) → tipler gölgeleniyor, 901/1853 dosya yanlış typeId | buildReview uniqueTypes, enrich registerSymbols, repoIndex typeMap |
-| B4 | 🔴 | `Object @Nullable ... args` (varargs tip anotasyonu) ayrıştırma hatası → parametre ve sonraki ~30 metot kayboluyor | java/extract (ön işleme) |
-| B5 | 🟡 | javax→jakarta import değişikliği "kozmetik" sayılıyor | analysis/cosmetic |
-| B6 | 🟡 | `return null;` gibi önemsiz gövdeler dosyalar arası "moved" eşleşiyor (test↔main dahil) | java/semanticDiff |
-| B7 | 🟡 | Git'in R%70 rename dediği dosyada tip removed+added çıkıyor (tutarsız) | java/semanticDiff + buildReview |
-| B8 | 🟡 | Overload yalnız arity ile bağlanıyor: L1'de 14067 likely vs 5019 exact; `join` 69 çağıran (gerçek ~6) | java/repoIndex bindMembers; analysis risk ağırlığı |
-| B9 | 🟡 | Tip parametresi adı değişimi (`T`→`E`) public API imza değişikliği sayılıyor | java/semanticDiff |
-| B10 | 🟡 | Risk gürültüsü: `Objects.hashCode` null-check azalması sayılıyor; body-changed + likely çağıranlar high üretiyor | java/extract nullChecks; analysis/risk |
-| B11 | 🟡 | "Override koptu" 4/4 yanlış pozitif (üst soyut bildirim kaldırıldı / metot üst arayüze taşındı) | analysis/enrich |
-| B12 | 🟡 | Worktree + core.autocrlf=true: diskteki CRLF vs LF blob → 31/32 üye kozmetik | sources/git worktree readFile |
-| B13 | 🟡 | Test eşleme statik alan erişimi (`TimeZones.GMT`) ve anotasyon argümanlarını referans saymıyor | java/repoIndex filesBySimpleRef |
-| B14 | 🟡 | Dev gruplar (1151 sembol / 333 dosya): hashCode/equals gibi hub semboller her şeyi birleştiriyor | analysis/grouping |
+| B1 | 🔴 | "Silinmiş ama hâlâ çağrılıyor" 81/81 yanlış pozitif | giderildi (analysis/enrich, findings, risk; java/repoIndex findCallsTo) |
+| B2 | 🔴 | Arity değişikliği aynı arity'li başka overload yüzünden gizleniyor (yanlış negatif) | giderildi (analysis/enrich findStale) |
+| B3 | 🔴 | Aynı FQN birden çok dosyada (guava flavor'ları) → tipler gölgeleniyor, 901/1853 dosya yanlış typeId | giderildi (buildReview uniqueTypes, enrich registerSymbols, repoIndex typeMap) |
+| B4 | 🔴 | `Object @Nullable ... args` (varargs tip anotasyonu) ayrıştırma hatası → parametre ve sonraki ~30 metot kayboluyor | giderildi (java/extract (ön işleme)) |
+| B5 | 🟡 | javax→jakarta import değişikliği "kozmetik" sayılıyor | giderildi (analysis/cosmetic) |
+| B6 | 🟡 | `return null;` gibi önemsiz gövdeler dosyalar arası "moved" eşleşiyor (test↔main dahil) | giderildi (java/semanticDiff) |
+| B7 | 🟡 | Git'in R%70 rename dediği dosyada tip removed+added çıkıyor (tutarsız) | giderildi (java/semanticDiff + buildReview) |
+| B8 | 🟡 | Overload yalnız arity ile bağlanıyor: L1'de 14067 likely vs 5019 exact; `join` 69 çağıran (gerçek ~6) | giderildi (java/repoIndex bindMembers; analysis risk ağırlığı) |
+| B9 | 🟡 | Tip parametresi adı değişimi (`T`→`E`) public API imza değişikliği sayılıyor | giderildi (java/semanticDiff) |
+| B10 | 🟡 | Risk gürültüsü: `Objects.hashCode` null-check azalması sayılıyor; body-changed + likely çağıranlar high üretiyor | giderildi (java/extract nullChecks; analysis/risk) |
+| B11 | 🟡 | "Override koptu" 4/4 yanlış pozitif (üst soyut bildirim kaldırıldı / metot üst arayüze taşındı) | giderildi (analysis/enrich) |
+| B12 | 🟡 | Worktree + core.autocrlf=true: diskteki CRLF vs LF blob → 31/32 üye kozmetik | giderildi (sources/git worktree readFile) |
+| B13 | 🟡 | Test eşleme statik alan erişimi (`TimeZones.GMT`) ve anotasyon argümanlarını referans saymıyor | giderildi (java/repoIndex filesBySimpleRef) |
+| B14 | 🟡 | Dev gruplar (1151 sembol / 333 dosya): hashCode/equals gibi hub semboller her şeyi birleştiriyor | giderildi (analysis/grouping) |
 
 ### B1 ayrıntı
 - (a) `findCallsTo` alıcı çözülemeyince `name-only` ekliyor, risk/bulgu güvene bakmıyor: `Shape#equals(Object)` ↔ `keys[i].equals(keys[j])`, `MD5Cyclic#getName()` ↔ `getClass().getName()`, `Processor#toString()` ↔ 52 alakasız çağrı.
@@ -43,7 +47,7 @@ Betikler `dist/server` modüllerini import eder: önce `npx tsc -p tsconfig.json
 guava: `guava/`, `android/guava/`, `guava-gwt/src-super`, `futures/` aynı FQN'leri içeriyor. 22 bulgu ve 58 plan sembol id'si modelde yok. Öneri: çift FQN'de id'yi kaynak köküyle ayır (`fqn@android/guava`), indeks çözümlemesinde aynı kaynak kökünü tercih et.
 
 ### B4 ayrıntı
-tree-sitter-java `@Nullable Object @Nullable ... args` desteklemiyor. `Preconditions.checkArgument(boolean,String,Object...)` id'si `checkArgument(boolean,String)`; sınıf aralığı erken bitiyor. Öneri: ayrıştırmadan önce `Tip (@Ann(...)\s*)+...` içindeki anotasyonu aynı uzunlukta boşlukla değiştir (satır/sütun korunur). İndeks dosyalarındaki ayrıştırma hataları da sayılıp uyarıya yazılsın. Yeniden üretim: `scratchpad/qa/syntax/A1.java`.
+tree-sitter-java `@Nullable Object @Nullable ... args` desteklemiyor. `Preconditions.checkArgument(boolean,String,Object...)` id'si `checkArgument(boolean,String)`; sınıf aralığı erken bitiyor. Öneri: ayrıştırmadan önce `Tip (@Ann(...)\s*)+...` içindeki anotasyonu aynı uzunlukta boşlukla değiştir (satır/sütun korunur). İndeks dosyalarındaki ayrıştırma hataları da sayılıp uyarıya yazılsın. 
 
 ### B6/B7/B9/B10/B11 ayrıntı
 - B6: farklı ad eşleşmesinde en az ~15 token veya aynı parametre+dönüş tipi şartı; test yolu ↔ main yolu eşleşmesin. Örnek: `DynamicHasher.NoValuesIterator#hasNext()` → `SimpleBloomFilter#isSparse()` (critical!).

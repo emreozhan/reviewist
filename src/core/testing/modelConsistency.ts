@@ -1,5 +1,5 @@
 /**
- * ReviewModel iç tutarlılığı (B3): modeldeki her sembol referansı modelde var olan bir id'ye ya da graf'ta 'impacted'
+ * ReviewModel iç tutarlılığı: modeldeki her sembol referansı modelde var olan bir id'ye ya da graf'ta 'impacted'
  * düğüme çıkmalı; tip/üye id'leri benzersiz olmalı; FileChange.typeIds ile TypeChange.file uyumlu olmalı.
  * Boş dizi dönerse model tutarlıdır.
  */

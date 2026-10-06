@@ -9,6 +9,7 @@ import type { Dirent } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { FsEntry, FsListing, FsRoot } from '../shared/types.js';
+import { expandHome, isNetworkPath, NETWORK_PATH_MESSAGE } from '../sources/common.js';
 import { shortMessage, SourceError } from '../sources/errors.js';
 
 export const FS_LIST_MAX_ENTRIES = 1000;
@@ -56,10 +57,32 @@ export interface FsListOptions {
   maxEntries?: number;
 }
 
-/** Klasör adı gizli mi: nokta ile başlayan ya da (Windows'ta) bilinen sistem/gizli klasör. */
-export function isHiddenName(name: string, platform: NodeJS.Platform = process.platform): boolean {
+/** macOS'ta kök dizinde Finder'ın da gizlediği sistem klasörleri. */
+const DARWIN_ROOT_HIDDEN = new Set(['bin', 'cores', 'dev', 'etc', 'home', 'net', 'opt', 'private', 'sbin', 'tmp', 'usr', 'var']);
+/** Linux'ta kök dizindeki sanal/sistem klasörleri. */
+const LINUX_ROOT_HIDDEN = new Set(['boot', 'dev', 'lost+found', 'proc', 'run', 'snap', 'sys']);
+/**
+ * macOS gizlilik koruması (TCC) altındaki ev klasörleri: içlerine dokunmak izin penceresi açar. Ev dizini listelenirken
+ * bunların içinde `.git` aranmaz; kullanıcı klasöre kendisi girdiğinde izin o zaman istenir.
+ */
+const DARWIN_PROTECTED_HOME = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures']);
+
+export interface HiddenContext {
+  /** Listelenen klasör dosya sisteminin kökü mü. */
+  atRoot?: boolean;
+  /** Listelenen klasör kullanıcının ev dizini mi. */
+  atHome?: boolean;
+}
+
+/**
+ * Klasör adı gizli mi: nokta ile başlayan, (Windows'ta) bilinen sistem/gizli klasör, (macOS/Linux'ta) kökteki sistem
+ * klasörleri ve macOS'ta ev dizinindeki `Library`.
+ */
+export function isHiddenName(name: string, platform: NodeJS.Platform = process.platform, ctx: HiddenContext = {}): boolean {
   if (name.startsWith('.')) return true;
-  return platform === 'win32' && WINDOWS_HIDDEN_NAMES.has(name.toLowerCase());
+  if (platform === 'win32') return WINDOWS_HIDDEN_NAMES.has(name.toLowerCase());
+  if (platform === 'darwin') return (ctx.atRoot === true && DARWIN_ROOT_HIDDEN.has(name)) || (ctx.atHome === true && name === 'Library');
+  return ctx.atRoot === true && LINUX_ROOT_HIDDEN.has(name);
 }
 
 /** Türkçe yerel duyarlı, sayı bilinçli ad karşılaştırması (eşitlikte ikili karşılaştırma: kararlı sıra). */
@@ -126,7 +149,11 @@ function errCode(err: unknown): string | undefined {
 function fsError(err: unknown, p: string): SourceError {
   const code = errCode(err);
   if (code === 'EPERM' || code === 'EACCES') {
-    return new SourceError(`Bu klasöre erişim izni yok: ${p}`, { status: 403, code: 'FORBIDDEN', field: 'path', detail: code });
+    const hint =
+      process.platform === 'darwin'
+        ? ' macOS izin istediyse onaylayın; istemediyse Sistem Ayarları → Gizlilik ve Güvenlik → Dosyalar ve Klasörler bölümünden terminal uygulamasına bu klasör için izin verin.'
+        : '';
+    return new SourceError(`Bu klasöre erişim izni yok: ${p}.${hint}`, { status: 403, code: 'FORBIDDEN', field: 'path', detail: code });
   }
   if (code === 'ENOENT' || code === 'ENOTDIR') {
     return new SourceError(`Klasör bulunamadı: ${p}`, { status: 404, code: 'PATH_NOT_FOUND', field: 'path', detail: code });
@@ -136,14 +163,16 @@ function fsError(err: unknown, p: string): SourceError {
 
 /** İstekteki yolu doğrular ve normalize eder (boşsa ev dizini). */
 export function normalizeRequestPath(raw: string | undefined, home: string): string {
-  const q = raw?.trim() ?? '';
-  if (q === '') return resolve(home);
-  if (q.includes('\0')) {
+  const typed = raw?.trim() ?? '';
+  if (typed === '') return resolve(home);
+  if (typed.includes('\0')) {
     throw new SourceError('Geçersiz yol.', { status: 400, code: 'VALIDATION', field: 'path' });
   }
-  if (/^[\\/]{2}/.test(q)) {
-    throw new SourceError('Ağ yolları (\\\\sunucu\\paylaşım) desteklenmiyor; yerel bir klasör seçin.', { status: 400, code: 'VALIDATION', field: 'path' });
+  if (isNetworkPath(typed)) {
+    throw new SourceError(NETWORK_PATH_MESSAGE, { status: 400, code: 'VALIDATION', field: 'path' });
   }
+  // `~` ve `~/klasör` ev dizinine açılır (kabuk bunu yalnız komut satırında yapar).
+  const q = expandHome(typed, home);
   // Windows'ta "\klasör" ve "C:klasör" sürücüye göre görelidir; tam yol isteriz.
   const absolute = process.platform === 'win32' ? /^[A-Za-z]:[\\/]/.test(q) || /^[A-Za-z]:$/.test(q) : isAbsolute(q);
   if (!absolute) {
@@ -180,15 +209,18 @@ export async function listDirectory(rawPath: string | undefined, opts: FsListOpt
     throw fsError(err, path);
   }
 
-  const candidates = dirents.filter((d) => (d.isDirectory() || d.isSymbolicLink()) && (opts.hidden || !isHiddenName(d.name, platform)));
+  const ctx: HiddenContext = { atRoot: parentOf(path) === undefined, atHome: path === resolve(home) };
+  const hiddenHere = (name: string): boolean => isHiddenName(name, platform, ctx);
+  const candidates = dirents.filter((d) => (d.isDirectory() || d.isSymbolicLink()) && (opts.hidden || !hiddenHere(d.name)));
   const dirFlags = await mapLimit(candidates, GIT_CHECK_CONCURRENCY, (d) => direntIsDir(path, d));
   const names = candidates.filter((_, i) => dirFlags[i]).map((d) => d.name).sort(compareNames);
   const truncated = names.length > max;
   const kept = truncated ? names.slice(0, max) : names;
 
+  const skipGitProbe = (name: string): boolean => platform === 'darwin' && ctx.atHome === true && DARWIN_PROTECTED_HOME.has(name);
   const entries = await mapLimit(kept, GIT_CHECK_CONCURRENCY, async (name): Promise<FsEntry> => {
     const full = join(path, name);
-    return { name, path: full, isGitRepo: await hasGitMarker(full), hidden: isHiddenName(name, platform) };
+    return { name, path: full, isGitRepo: skipGitProbe(name) ? false : await hasGitMarker(full), hidden: hiddenHere(name) };
   });
 
   const [isGitRepo, roots] = await Promise.all([hasGitMarker(path), listRoots({ home, cwd: opts.cwd, platform })]);
@@ -232,6 +264,23 @@ async function windowsDrives(): Promise<string[]> {
   return drives;
 }
 
+/** macOS: `/Volumes` altındaki harici/ek diskler (açılış diskine giden sembolik bağ hariç). Okunamazsa boş. */
+async function macVolumes(): Promise<{ name: string; path: string }[]> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<Dirent[]>((res) => {
+    timer = setTimeout(() => res([]), DRIVE_CHECK_TIMEOUT_MS);
+  });
+  try {
+    const dirents = await Promise.race([readdir('/Volumes', { withFileTypes: true }).catch(() => [] as Dirent[]), timeout]);
+    return dirents
+      .filter((d) => d.isDirectory() && !d.name.startsWith('.'))
+      .map((d) => ({ name: d.name, path: join('/Volumes', d.name) }))
+      .sort((a, b) => compareNames(a.name, b.name));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** İlk var olan klasör. */
 async function firstDir(candidates: string[]): Promise<string | undefined> {
   for (const c of candidates) if (await isDirectory(c)) return c;
@@ -247,11 +296,12 @@ export async function listRoots(opts: { home: string; cwd?: string; platform?: N
   const oneDriveDirs = [...new Set(oneDrive.filter((d): d is string => !!d))];
   const special = (names: string[]): string[] => [...names.map((n) => join(home, n)), ...oneDriveDirs.flatMap((od) => names.map((n) => join(od, n)))];
 
-  const [desktop, documents, downloads, drives] = await Promise.all([
+  const [desktop, documents, downloads, drives, volumes] = await Promise.all([
     firstDir(special(['Desktop', 'Masaüstü'])),
     firstDir(special(['Documents', 'Belgeler'])),
     firstDir([join(home, 'Downloads'), join(home, 'İndirilenler')]),
     win ? windowsDrives() : Promise.resolve(['/']),
+    platform === 'darwin' ? macVolumes() : Promise.resolve([]),
   ]);
 
   const roots: FsRoot[] = [{ label: 'Ev', path: home, kind: 'home' }];
@@ -260,6 +310,7 @@ export async function listRoots(opts: { home: string; cwd?: string; platform?: N
   if (downloads) roots.push({ label: 'İndirilenler', path: downloads, kind: 'special' });
   if (opts.cwd) roots.push({ label: 'Çalışma dizini', path: resolve(opts.cwd), kind: 'cwd' });
   for (const d of drives) roots.push({ label: win ? d.slice(0, 2) : 'Kök (/)', path: d, kind: 'drive' });
+  for (const v of volumes) roots.push({ label: v.name, path: v.path, kind: 'drive' });
 
   const seen = new Set<string>();
   return roots.filter((r) => {

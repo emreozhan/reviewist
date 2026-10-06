@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { peekRectFor } from '../../lib/peekLayout';
 import type { PanelSize } from '../../lib/peekLayout';
 import { takeRootReturnFocus, usePeek } from '../../state/peekStore';
-import { useReviewCtx } from '../workspace/ReviewContext';
 import { PeekConnectors } from './PeekConnectors';
 import { PeekWindow } from './PeekWindow';
 import { usePeekAutoClose, usePeekKeys } from './usePeekKeys';
@@ -13,7 +12,6 @@ import { usePeekAutoClose, usePeekKeys } from './usePeekKeys';
  * hepsi kapanınca tıklanan bağlantıya döner.
  */
 export function PeekLayer() {
-  const { review } = useReviewCtx();
   const entries = usePeek((s) => s.entries);
   const notice = usePeek((s) => s.notice);
   const noticeSeq = usePeek((s) => s.noticeSeq);
@@ -22,7 +20,6 @@ export function PeekLayer() {
   const bodies = useRef(new Map<string, HTMLDivElement>());
   const prevEntries = useRef(entries);
 
-  useEffect(() => usePeek.getState().reset(review.id), [review.id]);
   usePeekAutoClose();
   usePeekKeys(bodies);
 

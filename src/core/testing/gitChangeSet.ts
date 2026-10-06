@@ -1,6 +1,6 @@
 /**
  * YALNIZCA TEST İÇİN: git deposundan basit ChangeSet (`git diff --name-status`, `git show`, `git ls-tree`).
- * Asıl git kaynağı Şerit B'dedir (src/sources). Hunk'lar memoryChangeSet ile üretilir.
+ * Asıl git kaynağı src/sources altındadır. Hunk'lar memoryChangeSet ile üretilir.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';

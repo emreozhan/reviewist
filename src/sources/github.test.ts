@@ -7,7 +7,7 @@ import { c as tarCreate } from 'tar';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedChangeSet } from './common.js';
 import { SourceError } from './errors.js';
-import { createGithubChangeSet, parsePrUrl, parseRemoteUrl, resolveGithubToken } from './github.js';
+import { createGithubChangeSet, parsePrUrl, parseRemoteUrl, resolveGithubToken, resolveGithubTokenFor } from './github.js';
 
 const TOKEN = 'ghp_TESTTOKEN_should_never_leak_123';
 const API = 'https://api.github.com';
@@ -138,6 +138,31 @@ describe('parsePrUrl / parseRemoteUrl / token', () => {
     expect(resolveGithubToken('istek')).toBe('istek');
     vi.stubEnv('OZEL', 'ozel');
     expect(resolveGithubToken(undefined, ['OZEL', 'GITHUB_TOKEN'])).toBe('ozel');
+  });
+
+  it('ortam token\'ı yalnız github.com ve REVIEWIST_GITHUB_HOSTS sunucularına gider; formdaki token her sunucuya', () => {
+    vi.stubEnv('GITHUB_TOKEN', 'gizli');
+    vi.stubEnv('REVIEWIST_GITHUB_HOSTS', '');
+    expect(resolveGithubTokenFor('github.com')).toEqual({ token: 'gizli' });
+    expect(resolveGithubTokenFor('GitHub.com')).toEqual({ token: 'gizli' });
+    // Yapıştırılan yabancı adres: token gönderilmez, nedeni raporlanır
+    expect(resolveGithubTokenFor('github.com.evil.example')).toEqual({ withheldEnv: 'GITHUB_TOKEN' });
+    expect(resolveGithubTokenFor('git.sirket.com.tr')).toEqual({ withheldEnv: 'GITHUB_TOKEN' });
+    // Formda girilen token kullanıcının bilinçli seçimidir
+    expect(resolveGithubTokenFor('git.sirket.com.tr', 'elle')).toEqual({ token: 'elle' });
+    // Kurumsal sunucu açıkça güvenilir listesine alınabilir
+    vi.stubEnv('REVIEWIST_GITHUB_HOSTS', 'git.sirket.com.tr, ghe.example');
+    expect(resolveGithubTokenFor('git.sirket.com.tr')).toEqual({ token: 'gizli' });
+    expect(resolveGithubTokenFor('ghe.example')).toEqual({ token: 'gizli' });
+    expect(resolveGithubTokenFor('other.example')).toEqual({ withheldEnv: 'GITHUB_TOKEN' });
+    vi.stubEnv('GITHUB_TOKEN', '');
+    expect(resolveGithubTokenFor('github.com')).toEqual({});
+  });
+
+  it('http ve kimlik bilgisi gömülü PR adresleri reddedilir', () => {
+    expect(() => parsePrUrl('http://github.com/acme/shop/pull/7')).toThrow(/https/);
+    expect(() => parsePrUrl('https://github.com:x@evil.example/acme/shop/pull/7')).toThrow(/Geçersiz PR adresi/);
+    expect(() => parsePrUrl('https://user@github.com/acme/shop/pull/7')).toThrow(/Geçersiz PR adresi/);
   });
 });
 

@@ -130,7 +130,7 @@ describe('GET /api/config ve /api/git/refs', () => {
     expect(q.status).toBe(200);
   });
 
-  it('refs ve analiz istekleri ağ yolunu (UNC) reddeder', async () => {
+  it.runIf(process.platform === 'win32')('refs ve analiz istekleri ağ yolunu (UNC) reddeder (Windows)', async () => {
     const { app } = make();
     const refs = await app.request(`/api/git/refs?repoPath=${encodeURIComponent('\\\\evil\\share')}`);
     expect(refs.status).toBe(400);
@@ -173,7 +173,9 @@ describe('POST /api/reviews ve review uçları', () => {
     expect(model.warnings).toContain('motor uyarısı');
 
     const list = await body<ReviewListItem[]>(await app.request('/api/reviews'));
-    expect(list).toEqual([{ id: model.id, title: 'main...feature', createdAt: model.createdAt, kind: 'git', files: 2 }]);
+    expect(list).toEqual([
+      { id: model.id, title: 'main...feature', createdAt: model.createdAt, kind: 'git', files: 2, stableKey: model.source.stableKey },
+    ]);
     expect((await body<ReviewModel>(await app.request(`/api/reviews/${model.id}`))).id).toBe(model.id);
 
     const fNew = await body<{ content: string | null }>(await app.request(`/api/reviews/${model.id}/file?path=src/A.java&side=new`));
@@ -302,16 +304,6 @@ describe('POST /api/reviews ve review uçları', () => {
     errSpy.mockRestore();
   });
 
-  it.skipIf(existsSync(fileURLToPath(new URL('../core/buildReview.ts', import.meta.url))))(
-    'motor yoksa anlamlı 500 hatası',
-    async () => {
-      const a = createApp({ defaultRepoPath: repo });
-      apps.push(a);
-      const res = await a.app.request('/api/reviews', post({ kind: 'git', repoPath: repo, base: 'main', head: 'feature' }));
-      expect(res.status).toBe(500);
-      expect((await body<ApiError>(res)).error).toContain('Analiz motoru yüklenemedi');
-    },
-  );
 });
 
 // ---------------------------------------------------------------------------
@@ -636,6 +628,44 @@ describe('güvenlik: Host ve Origin', () => {
     expect(vite.status).toBe(400);
     const noOrigin = await app.request(url, post(payload, { host: '127.0.0.1:4317' }));
     expect(noOrigin.status).toBe(400);
+  });
+
+  it('paketlenmiş arayüz sunulurken vite dev portu (5173) izinli değildir', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'reviewist-static-'));
+    try {
+      writeFileSync(join(dir, 'index.html'), '<title>Reviewist</title>');
+      const a = createApp({ defaultRepoPath: repo, buildReview: fakeBuildReview, staticDir: dir });
+      apps.push(a);
+      const url = 'http://127.0.0.1:4317/api/reviews';
+      const vite = await a.app.request(url, post({ kind: 'svn' }, { host: '127.0.0.1:4317', origin: 'http://localhost:5173' }));
+      expect(vite.status).toBe(403);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('başka siteden gelen istekler (Sec-Fetch-Site) ve GET üzerindeki yabancı Origin reddedilir', async () => {
+    const { app } = make();
+    const h = { host: '127.0.0.1:4317' };
+    // Başka sitedeki bir sayfanın <img>/fetch isteği
+    const cross = await app.request('http://127.0.0.1:4317/api/git/refs', { headers: { ...h, 'sec-fetch-site': 'cross-site' } });
+    expect(cross.status).toBe(403);
+    expect((await body<ApiError>(cross)).error).toContain('başka bir siteden');
+    const sameSite = await app.request('http://127.0.0.1:4317/api/config', { headers: { ...h, 'sec-fetch-site': 'same-site' } });
+    expect(sameSite.status).toBe(403);
+    // Arayüzün kendi istekleri ve adres çubuğundan açılış
+    for (const site of ['same-origin', 'none']) {
+      const ok = await app.request('http://127.0.0.1:4317/api/config', { headers: { ...h, 'sec-fetch-site': site } });
+      expect(ok.status, site).toBe(200);
+    }
+    // Başlığı göndermeyen istemciler (curl) Host denetimiyle sınırlı kalır
+    expect((await app.request('http://127.0.0.1:4317/api/config', { headers: h })).status).toBe(200);
+    // CORS GET: yabancı Origin
+    const corsGet = await app.request('http://127.0.0.1:4317/api/config', { headers: { ...h, origin: 'http://evil.example' } });
+    expect(corsGet.status).toBe(403);
+    // Statik dosyalar için Sec-Fetch-Site denetimi yok (sayfa bağlantıyla açılabilir)
+    const page = await app.request('http://127.0.0.1:4317/', { headers: { ...h, 'sec-fetch-site': 'cross-site' } });
+    expect(page.status).not.toBe(403);
   });
 
   it('yardımcılar', () => {

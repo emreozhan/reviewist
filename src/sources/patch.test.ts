@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -60,17 +60,49 @@ describe('createPatchChangeSet', () => {
     expect(await cs.readFile('new', 'src/Gone.java')).toBeUndefined();
     expect(await cs.readFile('old', 'src/Ek.java')).toBeUndefined();
     expect(await cs.readFile('new', 'src/Ek.java')).toBe('class Ek {}\n');
-    expect(await cs.listFiles('new', '.java')).toEqual([]);
+    // Depo git olduğu için diff dışı dosyalar da listelenir (silinen çıkar, eklenen girer).
+    expect(await cs.listFiles('new', '.java')).toEqual(['src/Ek.java', 'src/Yeni.java']);
+    expect(cs.warnings).toEqual([]);
   });
 
-  it('disk içeriği yamayla uyuşmazsa eski taraf undefined', async () => {
+  it('yama klasöre uygulanmamışsa (disk = eski) yeni içerik yama uygulanarak türetilir', async () => {
+    const repo = realpathSync(mkdtempSync(join(tmpdir(), 'reviewist-patch-')));
+    dirs.push(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    git(repo, 'config', 'user.name', 'T');
+    git(repo, 'config', 'user.email', 't@example.com');
+    git(repo, 'config', 'core.autocrlf', 'false');
+    write(repo, 'src/A.txt', V1);
+    write(repo, 'src/Util.java', 'class Util {}\n');
+    write(repo, '.gitignore', '.env\n');
+    write(repo, '.env', 'SECRET=1\n');
+    git(repo, 'add', '-A');
+    git(repo, 'commit', '-q', '-m', 'v1');
+    write(repo, 'src/A.txt', V2);
+    const text = git(repo, 'diff', '--src-prefix=a/', '--dst-prefix=b/');
+    write(repo, 'src/A.txt', V1); // yama geri alındı: disk eski hâlde
+
+    const cs = await createPatchChangeSet({ text, repoPath: repo });
+    expect(await cs.readFile('old', 'src/A.txt')).toBe(V1);
+    expect(await cs.readFile('new', 'src/A.txt')).toBe(V2);
+    expect(cs.warnings.some((w) => w.includes('uygulanmamış'))).toBe(true);
+    // Yamada geçmeyen izlenen dosya iki tarafta da okunur; yoksayılan dosya (.env) asla.
+    expect(await cs.readFile('new', 'src/Util.java')).toBe('class Util {}\n');
+    expect(await cs.readFile('old', 'src/Util.java')).toBe('class Util {}\n');
+    expect(await cs.readFile('new', '.env')).toBeUndefined();
+    expect(await cs.listFiles('new', '.java')).toEqual(['src/Util.java']);
+  });
+
+  it('disk içeriği yamayla iki yönde de uyuşmazsa iki taraf da undefined', async () => {
     const root = mkdtempSync(join(tmpdir(), 'reviewist-patch-'));
     dirs.push(root);
     write(root, 'A.txt', 'tamamen\nfarklı\n');
     const text = ['--- a/A.txt', '+++ b/A.txt', '@@ -1,2 +1,2 @@', ' x', '-y', '+z', ''].join('\n');
     const cs = await createPatchChangeSet({ text, repoPath: root });
-    expect(await cs.readFile('new', 'A.txt')).toBe('tamamen\nfarklı\n');
+    expect(await cs.readFile('new', 'A.txt')).toBeUndefined();
     expect(await cs.readFile('old', 'A.txt')).toBeUndefined();
+    // git deposu olmayan klasörde diff dışı dosya listesi yoktur
+    expect(await cs.listFiles('new')).toEqual([]);
   });
 
   it('repoPath yoksa readFile undefined, listFiles []; Subject başlık olur', async () => {

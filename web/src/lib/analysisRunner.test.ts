@@ -83,6 +83,41 @@ describe('analiz işi', () => {
     expect(createReview).not.toHaveBeenCalled();
   });
 
+  it('geçici sorgu hatalarına dayanır (art arda 5 hataya kadar)', async () => {
+    const unreachable = () => new ApiRequestError('ulaşılamadı', { kind: 'unreachable', endpoint: '/api/jobs/j1' });
+    const results: (ReviewJob | Error)[] = [unreachable(), new ApiRequestError('5xx', { kind: 'http', status: 503, endpoint: 'x' }), job('running', ['a']), unreachable(), job('done', ['a'], { reviewId: 'rv1' })];
+    const getJob = vi.fn(async () => {
+      const r = results.shift();
+      if (!r || r instanceof Error) throw r ?? new Error('bitti');
+      return r;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = fakeApi({ createJob: async () => job('running', []), getJob, getReview: async () => MODEL });
+    await expect(runAnalysis(api, REQ, { signal: new AbortController().signal, onProgress: () => undefined, sleep: noSleep })).resolves.toBe(MODEL);
+    expect(getJob).toHaveBeenCalledTimes(5);
+    warn.mockRestore();
+  });
+
+  it('art arda 5 geçici hatada vazgeçer', async () => {
+    const getJob = vi.fn(async (): Promise<ReviewJob> => {
+      throw new ApiRequestError('ulaşılamadı', { kind: 'unreachable', endpoint: '/api/jobs/j1' });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = fakeApi({ createJob: async () => job('running', []), getJob });
+    await expect(runAnalysis(api, REQ, { signal: new AbortController().signal, onProgress: () => undefined, sleep: noSleep })).rejects.toMatchObject({ kind: 'unreachable' });
+    expect(getJob).toHaveBeenCalledTimes(5);
+    warn.mockRestore();
+  });
+
+  it('404 (iş yok) hemen durur', async () => {
+    const getJob = vi.fn(async (): Promise<ReviewJob> => {
+      throw new ApiRequestError('İş bulunamadı', { kind: 'http', status: 404, endpoint: '/api/jobs/j1', fromServerBody: true });
+    });
+    const api = fakeApi({ createJob: async () => job('running', []), getJob });
+    await expect(runAnalysis(api, REQ, { signal: new AbortController().signal, onProgress: () => undefined, sleep: noSleep })).rejects.toMatchObject({ status: 404 });
+    expect(getJob).toHaveBeenCalledTimes(1);
+  });
+
   it('iptal edilince sorgulamayı bırakır', async () => {
     const ac = new AbortController();
     const getJob = vi.fn(async () => job('running', ['a']));

@@ -1,5 +1,5 @@
 /**
- * Gruplama, okuma planı, etki grafiği, kozmetik ve zenginleştirme birim testleri (A1'siz, elle kurulmuş modeller).
+ * Gruplama, okuma planı, etki grafiği, kozmetik ve zenginleştirme birim testleri (ayrıştırıcısız, elle kurulmuş modeller).
  */
 import { describe, expect, it } from 'vitest';
 import type { CallRef, FileChange, Layer, RiskInfo } from '../../shared/types.js';

@@ -4,6 +4,7 @@ import { clearParseCache, closeParsePool, defaultParseConcurrency, parseJavaFile
 import type { JavaFileModel } from './model.js';
 import { RepoIndex } from './repoIndex.js';
 import { diffJavaFile } from './semanticDiff.js';
+import { perfMode } from '../testing/perfMode.js';
 
 const FILE_COUNT = 3000;
 
@@ -66,7 +67,6 @@ describe('performans', () => {
     }
     const t3 = performance.now();
     const members = models.reduce((n, m) => n + m.types.reduce((k, t) => k + t.members.length, 0), 0);
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] ${FILE_COUNT} dosya / ${members} üye: ayrıştırma ${(t1 - t0).toFixed(0)} ms, ` +
         `indeks ${(t2 - t1).toFixed(0)} ms, 300 diff ${(t3 - t2).toFixed(0)} ms`,
@@ -74,9 +74,8 @@ describe('performans', () => {
     expect(models.every((m) => !m.hasErrors)).toBe(true);
     expect(changed).toBe(300);
     expect(idx.callersOf('com.acme.m1.Service1#op1(int,List)').length).toBeGreaterThan(0);
-    // Mutlak süre sınırı yalnız `npm run test:perf` (tek başına, REVIEWIST_PERF=1) ile uygulanır;
-    // tam test seti paralel koşarken CPU paylaşıldığı için bu sınır kararsız olur.
-    if (process.env.REVIEWIST_PERF === '1' || process.env.npm_lifecycle_event === 'test:perf') expect(t3 - t0).toBeLessThan(20_000);
+    // Mutlak süre sınırı yalnız performans modunda (bkz. testing/perfMode.ts).
+    if (perfMode()) expect(t3 - t0).toBeLessThan(20_000);
   });
 });
 
@@ -96,7 +95,6 @@ describe('performans: ayrıştırma havuzu + önbellek', () => {
     const t2 = performance.now();
     const cached = await parseJavaFiles(inputs);
     const t3 = performance.now();
-    // eslint-disable-next-line no-console
     console.log(
       `[perf] ${FILE_COUNT} dosya: tek thread ${(t1 - t0).toFixed(0)} ms, havuz (${defaultParseConcurrency()} işçi, ısınma dahil) ` +
         `${(t2 - t1).toFixed(0)} ms, önbellek ${(t3 - t2).toFixed(0)} ms; ${JSON.stringify(parsePoolStats())}`,
@@ -104,6 +102,6 @@ describe('performans: ayrıştırma havuzu + önbellek', () => {
     expect(pooled).toEqual(single);
     expect(cached).toHaveLength(FILE_COUNT);
     expect(cached[10]).toBe(pooled[10]);
-    expect(t3 - t2).toBeLessThan((t2 - t1) / 10);
+    if (perfMode()) expect(t3 - t2).toBeLessThan((t2 - t1) / 10);
   });
 });

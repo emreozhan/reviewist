@@ -13,6 +13,7 @@ import {
   neighborTab,
   openTab,
   pinTab,
+  reconcileInDiff,
   reviveTabs,
   serializeTabs,
   stepHistory,
@@ -174,16 +175,37 @@ describe('gezinme geçmişi', () => {
 });
 
 describe('kalıcılık', () => {
-  it('serileştirip geri yükler; bilinmeyen diff içi sekmeler atılır', () => {
+  it('serileştirip geri yükler; inDiff güncel incelemeden yeniden hesaplanır', () => {
     let s = open(EMPTY_TABS, 'A.java', { symbolId: 'a' });
     s = open(s, 'Out.java', { inDiff: false, symbolId: 'o' });
     s = open(s, 'Gone.java');
     const raw = JSON.parse(JSON.stringify(serializeTabs(s))) as unknown;
+    // Yeni analizde: Out.java artık değişmiş (diff'te), Gone.java artık değişmemiş.
     const back = reviveTabs(raw, (p) => p !== 'Gone.java');
-    expect(back.tabs.map((t) => t.path)).toEqual(['A.java', 'Out.java']);
-    expect(back.activeKey).toBe(tabKey('A.java'));
-    expect(back.history.map((e) => e.path)).toEqual(['A.java', 'Out.java']);
-    expect(back.cursor).toBe(1);
+    expect(back.tabs.map((t) => [t.path, t.inDiff])).toEqual([
+      ['A.java', true],
+      ['Out.java', true],
+      ['Gone.java', false],
+    ]);
+    expect(back.activeKey).toBe(tabKey('Gone.java'));
+    expect(back.history.map((e) => [e.path, e.inDiff])).toEqual([
+      ['A.java', true],
+      ['Out.java', true],
+      ['Gone.java', false],
+    ]);
+    expect(back.cursor).toBe(2);
+  });
+
+  it('bellekteki sekmeler yeniden analizde uzlaştırılır; değişiklik yoksa aynı nesne', () => {
+    let s = open(EMPTY_TABS, 'A.java');
+    s = open(s, 'Out.java', { inDiff: false });
+    expect(reconcileInDiff(s, (p) => p === 'A.java')).toBe(s);
+    const r = reconcileInDiff(s, () => true);
+    expect(r.tabs.find((t) => t.path === 'Out.java')?.inDiff).toBe(true);
+    expect(r.history.every((e) => e.inDiff)).toBe(true);
+    const old = openTab(EMPTY_TABS, { path: 'Del.java', side: 'old', inDiff: false, label: 'Del' }, { preview: false, activate: true, tick: 1 });
+    // Eski taraf sekmesi diff sekmesine çevrilmez.
+    expect(reconcileInDiff(old, () => true)).toBe(old);
   });
 
   it('bozuk kayıt boş duruma düşer', () => {

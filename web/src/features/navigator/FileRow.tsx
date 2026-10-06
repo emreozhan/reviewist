@@ -20,6 +20,7 @@ export function FileRow({ file, order, compact = false }: FileRowProps) {
   const selected = useUi((s) => s.selectedFileId === file.id);
   const selectFile = useUi((s) => s.selectFile);
   const seen = useProgress((s) => !!s.seen[file.id]);
+  const stale = useProgress((s) => !!s.stale[file.id]);
   const toggleSeen = useProgress((s) => s.toggleSeen);
   return (
     <div className={`frow${selected ? ' is-selected' : ''}${seen ? ' is-seen' : ''}${file.cosmeticOnly ? ' is-cosmetic' : ''}`}>
@@ -46,6 +47,11 @@ Tık: önizleme sekmesi · çift tık: kalıcı sekme`}>
           {!compact && <span className="frow__dir">{compactDir(file.path)}</span>}
         </span>
         <span className="frow__meta">
+          {stale && (
+            <span className="tag tag--stale" title="Görüldü olarak işaretlenmişti; o zamandan beri bu dosyanın değişikliği farklılaştı">
+              görüldükten sonra değişti
+            </span>
+          )}
           {file.cosmeticOnly && <span className="tag tag--cosmetic">kozmetik</span>}
           {file.isTest && <span className="tag">test</span>}
           <DeltaBar additions={file.additions} deletions={file.deletions} showNumbers={!compact} />

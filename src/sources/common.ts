@@ -3,7 +3,9 @@
  * ikili içerik tespiti, eşzamanlılık sınırlayıcı, eski/yeni taraf yol eşlemesi.
  */
 import { createHash } from 'node:crypto';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { ChangeSet, ChangeSetFile } from '../shared/types.js';
 
 /** Kaynak katmanının döndürdüğü ChangeSet: uyarılar + kaynakları serbest bırakma. */
@@ -15,6 +17,11 @@ export interface ManagedChangeSet extends ChangeSet {
    * tamamen serbest kaldığında çözülür; çağıranın beklemesi zorunlu değildir.
    */
   dispose(): void | Promise<void>;
+  /**
+   * Analiz bittikten sonra çağrılır: yalnız analiz sırasında işe yarayan büyük önbellekleri bırakır.
+   * Kaynak kullanılabilir kalır (sonraki okumalar yeniden yüklenir).
+   */
+  compact?(): void;
 }
 
 /** İlk 8000 baytta NUL varsa ikili sayılır (git'in sezgiseliyle aynı). */
@@ -205,6 +212,55 @@ export function resolveInside(root: string, rel: string): string | undefined {
   return abs;
 }
 
+const realRootCache = new Map<string, Promise<string>>();
+
+function realRootOf(root: string): Promise<string> {
+  let p = realRootCache.get(root);
+  if (!p) {
+    p = realpath(root);
+    p.catch(() => realRootCache.delete(root));
+    realRootCache.set(root, p);
+    if (realRootCache.size > 64) realRootCache.delete(realRootCache.keys().next().value as string);
+  }
+  return p;
+}
+
+/**
+ * Depo içindeki bir dosyayı diskten okur; git'in gördüğü içerikle tutarlı ve depo dışına çıkmayacak şekilde:
+ *  - Dosyanın kendisi sembolik bağ ise hedef izlenmez; bağın gösterdiği yol metni döner (git blob'u da budur).
+ *  - Üst klasörlerden biri depo dışını gösteren bir bağ ise (ya da yol kök dışına çıkıyorsa) okunmaz.
+ *  - Normal dosya olmayanlar (klasör, soket, aygıt) okunmaz.
+ * Okunamayan her durumda undefined döner.
+ */
+export async function readRepoFile(root: string, rel: string): Promise<Buffer | undefined> {
+  const abs = resolveInside(root, rel);
+  if (!abs) return undefined;
+  try {
+    const st = await lstat(abs);
+    if (st.isSymbolicLink()) return Buffer.from(await readlink(abs), 'utf8');
+    if (!st.isFile()) return undefined;
+    const [realRoot, realFile] = await Promise.all([realRootOf(root), realpath(abs)]);
+    const r = relative(realRoot, realFile);
+    if (r === '' || r.startsWith('..') || isAbsolute(r)) return undefined;
+    return await readFile(abs);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Baştaki `~` (ev dizini) kısaltmasını açar: `~`, `~/x` (Windows'ta `~\x` de). Diğer yollar olduğu gibi döner. */
+export function expandHome(p: string, home: string = homedir()): string {
+  if (p === '~') return home;
+  if (p.startsWith('~/') || p.startsWith('~\\')) return join(home, p.slice(2));
+  return p;
+}
+
+/** İşletim sisteminin bıraktığı, incelemeye girmemesi gereken dosyalar (macOS Finder, AppleDouble, Windows küçük resimleri). */
+export function isOsJunkFile(path: string): boolean {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  return name === '.DS_Store' || name.startsWith('._') || name === 'Thumbs.db' || name === 'desktop.ini';
+}
+
 export interface SideTarget {
   /** O tarafta okunacak yol; dosya o tarafta yoksa undefined. */
   path?: string;
@@ -251,10 +307,13 @@ export function createSideResolver(files: ChangeSetFile[]): (side: 'old' | 'new'
  * İstemciden gelen depo-göreli yolu doğrular ve normalize eder. Mutlak yol (`/x`, `\x`, `C:\x`, `C:x`),
  * `..` bölümü, NUL ve satır sonu içeren ya da boş yol için undefined döner (yol geçişi koruması).
  */
-export function sanitizeRepoRelPath(raw: string): string | undefined {
+export function sanitizeRepoRelPath(raw: string, platform: NodeJS.Platform = process.platform): string | undefined {
   if (raw === '' || /[\0\r\n]/.test(raw)) return undefined;
-  if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:/.test(raw)) return undefined;
-  const parts = raw.replace(/\\/g, '/').split('/');
+  if (raw.startsWith('/')) return undefined;
+  // Ters eğik çizgi ve sürücü harfi yalnız Windows'ta yol ayırıcısıdır; POSIX'te dosya adının parçası olabilir.
+  const windows = platform === 'win32';
+  if (windows && (raw.startsWith('\\') || /^[A-Za-z]:/.test(raw))) return undefined;
+  const parts = (windows ? raw.replace(/\\/g, '/') : raw).split('/');
   if (parts.some((s) => s === '..')) return undefined;
   const clean = parts.filter((s) => s !== '' && s !== '.').join('/');
   return clean === '' ? undefined : clean;
@@ -304,8 +363,9 @@ export function filterByExt(paths: string[], ext?: string): string[] {
  * Yerel sunucunun başka bir sayfa tarafından uzak SMB paylaşımına bağlanmaya zorlanmasını
  * (Windows kimlik bilgisi sızıntısı) önlemek için depo yollarında reddedilir.
  */
-export function isNetworkPath(p: string): boolean {
-  return /^[\\/]{2}/.test(p.trim());
+export function isNetworkPath(p: string, platform: NodeJS.Platform = process.platform): boolean {
+  // POSIX'te `//x` sıradan yerel bir yoldur; SMB'ye bağlanma riski yalnız Windows'ta vardır.
+  return platform === 'win32' && /^[\\/]{2}/.test(p.trim());
 }
 
 export const NETWORK_PATH_MESSAGE = 'Ağ yolları (\\\\sunucu\\paylaşım) desteklenmiyor; yerel bir klasör seçin.';

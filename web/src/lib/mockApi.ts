@@ -52,8 +52,8 @@ const JOB_TIMELINE: { at: number; message: string }[] = [
   { at: 0, message: 'Değişiklikler okunuyor: main...feature/ai-refactor' },
   { at: 350, message: '20 dosya, 9 Java dosyası değişmiş' },
   { at: 800, message: 'Java dosyaları ayrıştırılıyor: 9/9' },
-  { at: 1300, message: 'Repo indeksi: 412/1250 dosya' },
-  { at: 1700, message: 'Repo indeksi: 1250/1250 dosya' },
+  { at: 1300, message: 'Depo indeksi: 412/1250 dosya' },
+  { at: 1700, message: 'Depo indeksi: 1250/1250 dosya' },
   { at: 2100, message: 'Çağıranlar ve alt tipler çözülüyor' },
   { at: 2500, message: 'Risk, gruplar ve okuma planı hesaplanıyor' },
 ];
@@ -148,8 +148,8 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
   async listReviews(): Promise<ReviewListItem[]> {
     await delay(60);
     const { sampleReview } = await sample();
-    const items: ReviewListItem[] = [sampleReview].filter((r) => !deleted.has(r.id)).map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length }));
-    if (!deleted.has(LARGE_ID)) items.push({ id: LARGE_ID, title: 'v31.0...v33.0 (sentetik büyük review)', createdAt: '2026-10-03T00:00:00.000Z', kind: 'git', files: 2000 });
+    const items: ReviewListItem[] = [sampleReview].filter((r) => !deleted.has(r.id)).map((r) => ({ id: r.id, title: r.source.title, createdAt: r.createdAt, kind: r.source.kind, files: r.files.length, stableKey: r.source.stableKey }));
+    if (!deleted.has(LARGE_ID)) items.push({ id: LARGE_ID, title: 'v31.0...v33.0 (sentetik büyük inceleme)', createdAt: '2026-10-03T00:00:00.000Z', kind: 'git', files: 2000 });
     return items;
   },
   async getReview(id: string, opts?: LoadOptions): Promise<ReviewModel> {
@@ -160,7 +160,7 @@ export const mockApi: ReviewApi & { createReviewNow(req: ReviewRequest): Promise
     }
     const { sampleReview, SAMPLE_REVIEW_ID } = await sample();
     if (id === SAMPLE_REVIEW_ID && !deleted.has(id)) return created.find((r) => r.id === id) ?? sampleReview;
-    throw new ApiRequestError(`Review bulunamadı: ${id}`, { kind: 'http', status: 404, endpoint: `mock:/api/reviews/${id}`, fromServerBody: true });
+    throw new ApiRequestError(`İnceleme bulunamadı: ${id}`, { kind: 'http', status: 404, endpoint: `mock:/api/reviews/${id}`, fromServerBody: true });
   },
   async getFile(_id: string, path: string, side: FileSide): Promise<FileContentResponse> {
     await delay(90);

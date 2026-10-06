@@ -1,14 +1,9 @@
 import { useEffect } from 'react';
 import type { RefObject } from 'react';
+import { isTypingTarget } from '../../lib/keyTarget';
 import { usePeek } from '../../state/peekStore';
 import { useTabs } from '../../state/tabsStore';
 import { useUi } from '../../state/uiStore';
-
-function isTypingTarget(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-}
 
 /**
  * Yığın klavyesi: Esc üstteki pencereyi kapatır; Alt+↑ / Alt+↓ odağı bir üst / alt seviyedeki pencereye taşır.

@@ -20,13 +20,24 @@ export type Route = { name: 'home' } | { name: 'review'; id: string; tab: Tab; p
 
 const TABS: readonly Tab[] = ['workspace', 'graph', 'findings'];
 
+/** Bozuk `%` dizisi (ör. `%E0%A4%A`) içeren parça için fırlatmaz: çözülemezse ham metin döner. */
+export function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** Adres çubuğundan gelen hash'i ayrıştırır; hiçbir girdi için fırlatmaz (render sırasında çağrılır). */
 export function parseHash(hash: string): Route {
   const raw = hash.replace(/^#/, '');
   const [pathPart = '', queryPart = ''] = raw.split('?');
-  const segs = pathPart.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
+  const segs = pathPart.split('/').filter(Boolean).map(safeDecode);
   if (segs[0] !== 'review' || !segs[1]) return { name: 'home' };
   const tabSeg = segs[2] as Tab | undefined;
   const tab: Tab = tabSeg && TABS.includes(tabSeg) ? tabSeg : 'workspace';
+  // URLSearchParams bozuk `%` dizilerinde fırlatmaz (olduğu gibi bırakır).
   const q = new URLSearchParams(queryPart);
   const params: RouteParams = {};
   const file = q.get('file');

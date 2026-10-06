@@ -8,6 +8,7 @@ import { baseName, findAnchor } from '../../lib/reviewIndex';
 import { LAYER_LABEL } from '../../lib/selectors';
 import { ExternalPreview } from '../inspector/ExternalPreview';
 import { useReviewCtx } from '../workspace/ReviewContext';
+import { BG_CLICK } from '../../lib/openIntent';
 
 interface GraphNodeCardProps {
   node: ImpactNode;
@@ -21,15 +22,15 @@ export function GraphNodeCard({ node, onClose }: GraphNodeCardProps) {
   const inDiff = index.symbolFile.has(node.id);
   const anchor = inDiff ? undefined : findAnchor(index, node.id);
   const loc = inDiff ? undefined : locateSymbol(index, node.id);
-  // Gözat: çalışma alanına geçip orta panelin önünde pencere açar (Shift: sekmede, Ctrl: arka plan sekmesi).
+  // Pencerede aç: çalışma alanına geçip orta panelin önünde pencere açar (Shift: sekmede, Ctrl: arka plan sekmesi).
   const peek = (
     <button
       type="button"
       className="btn btn--primary btn--sm"
-      title="Çalışma alanında gözatma penceresinde aç (Shift+tık: sekmede · Ctrl+tık: arka plan sekmesi)"
+      title={`Çalışma alanında gözatma penceresinde aç (Shift+tık: sekmede · ${BG_CLICK}: arka plan sekmesi)`}
       {...intentLinkProps((intent) => void nav.openByIntent(node.id, intent, { from: 'top' }))}
     >
-      Gözat
+      Pencerede aç
     </button>
   );
 
@@ -54,7 +55,7 @@ export function GraphNodeCard({ node, onClose }: GraphNodeCardProps) {
       {inDiff ? (
         <span className="gcard__actions">
           {peek}
-          <button type="button" className="btn btn--sm" title="Ctrl+tık: arka plan sekmesi" {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
+          <button type="button" className="btn btn--sm" title={`${BG_CLICK}: arka plan sekmesi`} {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
             Sekmede aç
           </button>
         </span>
@@ -63,7 +64,7 @@ export function GraphNodeCard({ node, onClose }: GraphNodeCardProps) {
           <p className="gcard__note">Bu sembol diff dışında; değişmedi ama değişen koda bağlı.</p>
           <span className="gcard__actions">
             {peek}
-            <button type="button" className="btn btn--sm" title="Salt okunur kaynak sekmesi (Ctrl+tık: arka planda)" {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
+            <button type="button" className="btn btn--sm" title={`Salt okunur kaynak sekmesi (${BG_CLICK}: arka planda)`} {...linkProps((background) => void nav.openSymbol(node.id, { background }))}>
               Sınıfını sekmede aç
             </button>
           </span>

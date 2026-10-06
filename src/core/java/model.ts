@@ -1,7 +1,7 @@
 /**
  * Core iç sözleşmesi: Java ayrıştırma modeli + semantik diff + repo indeksi.
- * Üreten: şerit A1 (parser/extract/semanticDiff/repoIndex)
- * Tüketen: şerit A2 (risk, katman, mimari, test eşleme, gruplama, plan, graf, buildReview)
+ * Java katmanı (`java/`: parser, extract, semanticDiff, repoIndex) bu modeli üretir; analiz katmanı (`analysis/`: risk,
+ * katman, mimari, test eşleme, gruplama, plan, graf) ve `buildReview` tüketir.
  */
 import type {
   CallRef,
@@ -42,13 +42,13 @@ export interface CallSite {
    */
   args?: string[];
   /**
-   * (Tur 4) Çağrılan ad tanımlayıcısının sütun aralığı: satır içi 0 tabanlı UTF-16 kod birimi, [col, endCol).
+   * Çağrılan ad tanımlayıcısının sütun aralığı: satır içi 0 tabanlı UTF-16 kod birimi, [col, endCol).
    * Metot çağrısında metot adı, yapıcıda tip adı (`new a.B<X>()` içinde `B`), metot referansında `::` sonrası ad
    * (`X::new` içinde `new`), `this(...)`/`super(...)` çağrısında anahtar sözcük.
    */
   col?: number;
   endCol?: number;
-  /** (Tur 4) Ad tanımlayıcısı `line`dan farklı satırdaysa (ör. `new` ile tip adı ayrı satırda) o satır (1 tabanlı). */
+  /** Ad tanımlayıcısı `line`dan farklı satırdaysa (ör. `new` ile tip adı ayrı satırda) o satır (1 tabanlı). */
   nameLine?: number;
 }
 
@@ -71,7 +71,10 @@ export interface JavaMember {
   /**
    * Kararlı sembol id'si:
    *  - metot/yapıcı: `${ownerFqn}#${name}(${paramTypesErased.join(',')})`  ör. 'com.acme.OrderService#place(Order,int)'
-   *    (parametre tipi: generic argümanlar silinmiş, paket öneki atılmış basit ad; dizi '[]', varargs '...' korunur)
+   *    (parametre tipi: generic argümanlar silinmiş, paket öneki atılmış basit ad; dizi '[]', varargs '...' korunur).
+   *    Aynı tipte iki üye aynı id'yi alırsa (`fmt(java.util.Date)` ↔ `fmt(java.sql.Date)`) yalnız o gruptakiler
+   *    parametre tipini kaynakta yazıldığı nitelikle alır (`fmt(Date)`, `fmt(java.sql.Date)`); yine çakışanlara
+   *    kaynak sırasıyla `~2`, `~3` eklenir. Çakışma yoksa biçim yukarıdaki gibidir.
    *  - alan / enum sabiti: `${ownerFqn}#${name}`
    *  - initializer: `${ownerFqn}#<clinit>#${sira}` veya `#<init>#${sira}`
    */
@@ -100,18 +103,18 @@ export interface JavaMember {
   features: CodeFeatures;
   initializerText?: string; // alan başlatıcısı
   /**
-   * (Tur 3) Bildirim içindeki anonim sınıflar (`new I() { ... }`), kaynak sırasıyla (iç içe olanlar dahil); yoksa alan yok.
+   * Bildirim içindeki anonim sınıflar (`new I() { ... }`), kaynak sırasıyla (iç içe olanlar dahil); yoksa alan yok.
    * RepoIndex bunları `overriddenBy` sonuçlarına sentetik id ile ekler: `${member.id}$anon${n}#${ad}(${parametreler})` (n 1 tabanlı).
    * Sentetik id'ler `getMember` ile çözülmez.
    */
   anonymousClasses?: AnonymousClassInfo[];
-  /** Bildirimdeki ad tanımlayıcısının konumu (Tur 4; initializer'da `static`/`{` belirteci): satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
+  /** Bildirimdeki ad tanımlayıcısının konumu (initializer'da `static`/`{` belirteci): satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
   nameLine?: number;
   nameCol?: number;
   nameEndCol?: number;
 }
 
-/** (Tur 3) Anonim sınıf özeti. */
+/** Anonim sınıf özeti. */
 export interface AnonymousClassInfo {
   superType: string; // `new` ile verilen tip (generic silinmiş ham ad): 'Comparator', 'Outer.Listener'
   line: number;
@@ -135,7 +138,7 @@ export interface JavaType {
   nestedTypeFqns: string[];
   fieldTypes: Record<string, string>; // alan adı -> tip (kalıtılanlar hariç)
   normalizedText: string; // yorum/boşluk normalize edilmiş tüm tip metni
-  /** Bildirimdeki ad tanımlayıcısının konumu (Tur 4): satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
+  /** Bildirimdeki ad tanımlayıcısının konumu: satır 1 tabanlı, sütunlar satır içi 0 tabanlı UTF-16 [start, end). */
   nameLine?: number;
   nameCol?: number;
   nameEndCol?: number;
@@ -159,13 +162,13 @@ export interface JavaFileModel {
   /** importlar hariç, yorum/boşluk normalize edilmiş dosya metni. */
   normalizedCode: string;
   /**
-   * (Tur 3) Dosyada (string/yorum dışında) geçen, büyük harfle başlayan tanımlayıcılar: olası tip referansları
+   * Dosyada (string/yorum dışında) geçen, büyük harfle başlayan tanımlayıcılar: olası tip referansları
    * (alan erişimi niteleyicisi `TimeZones.GMT`, statik çağrı alıcısı, anotasyon argümanı, `X.class`, generic, cast...).
    * Önünde '.' olan tamamı büyük harfli adlar (sabitler: `Foo.MAX`) hariç. filesReferencingType bunu kullanır.
    */
   typeRefs?: string[];
   /**
-   * (Tur 4) Tip referanslarının konumları (kod gezinme için); `decodeTypeRefPositions` (typeRefTable.ts) ile okunur.
+   * Tip referanslarının konumları (kod gezinme için); `decodeTypeRefPositions` (typeRefTable.ts) ile okunur.
    * Bellek için sıkıştırılmış: `data` her referans için 5 sayı tutar:
    * [names indeksi, satır (1 tabanlı), başlangıç sütunu, bitiş sütunu (hariç), bayraklar]. Sütunlar UTF-16 kod birimi.
    * Bayraklar (bit): 1 = ifade konumu (`Foo.bar()` alıcısı, `Foo::x`, `Foo.CONST`; değişken de olabilir),
@@ -175,25 +178,25 @@ export interface JavaFileModel {
   typeRefPositions?: TypeRefTable;
 }
 
-/** (Tur 4) Sıkıştırılmış tip referansı tablosu (bkz. JavaFileModel.typeRefPositions). */
+/** Sıkıştırılmış tip referansı tablosu (bkz. JavaFileModel.typeRefPositions). */
 export interface TypeRefTable {
   names: string[];
   data: Int32Array;
 }
 
 // ---------------------------------------------------------------------------
-// Semantik diff çıktısı (A1 üretir, A2 zenginleştirir)
+// Semantik diff çıktısı (semanticDiff üretir, analiz katmanı zenginleştirir)
 // ---------------------------------------------------------------------------
 
 export interface MemberDiff {
-  /** risk: {score:0, level:'low', reasons:[]} ve callers/callees/overrides/overriddenBy boş dizi olarak gelir; A2 doldurur. */
+  /** risk: {score:0, level:'low', reasons:[]} ve callers/callees/overrides/overriddenBy boş dizi olarak gelir; analiz katmanı (enrich/scoring) doldurur. */
   change: MemberChange;
   oldMember?: JavaMember;
   newMember?: JavaMember;
 }
 
 export interface TypeDiff {
-  /** change.members === members.map(m => m.change) (aynı nesne referansları). risk ve subTypes A2'de doldurulur. */
+  /** change.members === members.map(m => m.change) (aynı nesne referansları). risk ve subTypes analiz katmanında doldurulur. */
   change: TypeChange;
   oldType?: JavaType;
   newType?: JavaType;
@@ -203,7 +206,7 @@ export interface TypeDiff {
 }
 
 // ---------------------------------------------------------------------------
-// Fonksiyon sözleşmeleri (A1 uygular)
+// Fonksiyon sözleşmeleri (java/ modülleri uygular)
 // ---------------------------------------------------------------------------
 
 /** src/core/java/parser.ts */
@@ -242,7 +245,7 @@ export interface RepoIndexApi {
   overridesOf(memberId: string): string[];
   /** Alt tiplerde (geçişli) bu metodu override eden metot id'leri. */
   overriddenBy(memberId: string): string[];
-  /** Head tarafında bu sembolü çağıranlar. inChangedCode her zaman false döner; A2 düzeltir. */
+  /** Head tarafında bu sembolü çağıranlar. inChangedCode her zaman false döner; analiz katmanı düzeltir. */
   callersOf(memberId: string): CallRef[];
   calleesOf(memberId: string): string[];
   /** Silinmiş/yeniden adlandırılmış üyeler için: owner tipi (ve alt tipleri) üzerinde name/argCount ile çağrılar. */
@@ -250,14 +253,14 @@ export interface RepoIndexApi {
   /** Tipi import eden veya basit adıyla kullanan dosyalar. */
   filesReferencingType(fqn: string): string[];
   /**
-   * (Tur 3) Bir çağrı yerinin head'de bağlandığı hedef üye id'leri (fromId = çağıran üye, line = çağrı satırı, name = çağrılan ad).
+   * Bir çağrı yerinin head'de bağlandığı hedef üye id'leri (fromId = çağıran üye, line = çağrı satırı, name = çağrılan ad).
    * Bayat çağrı tespitinde: hedef head'de var olan bir üyeyse çağrı bayat değildir.
    */
   targetsOfCallSite(fromId: string, line: number, name: string): string[];
-  /** (Tur 3) Aynı FQN'i bildiren tüm tipler (guava flavor'ları gibi çok kaynak köklü repolar). */
+  /** Aynı FQN'i bildiren tüm tipler (guava flavor'ları gibi çok kaynak köklü repolar). */
   typesByFqn(fqn: string): { type: JavaType; file: JavaFileModel }[];
   /**
-   * (Tur 4, opsiyonel) `targetsOfCallSite` ile aynı anahtar için bağlama güveni; aynı anahtarda birden çok bağlama
+   * (opsiyonel) `targetsOfCallSite` ile aynı anahtar için bağlama güveni; aynı anahtarda birden çok bağlama
    * varsa en zayıfı. Bağlanmamışsa undefined.
    */
   callSiteConfidence?(fromId: string, line: number, name: string): CallRef['confidence'] | undefined;

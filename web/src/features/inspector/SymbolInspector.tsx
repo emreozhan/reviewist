@@ -16,7 +16,7 @@ export function SymbolInspector({ symbolId }: { symbolId: string }) {
   const member = index.memberById.get(symbolId);
   const type = member ? index.typeById.get(member.ownerTypeId) : index.typeById.get(symbolId);
   const subject = member ?? type;
-  if (!subject) return <p className="muted insp__empty">Sembol bu review'da bulunamadı.</p>;
+  if (!subject) return <p className="muted insp__empty">Sembol bu incelemede bulunamadı.</p>;
 
   const file = index.symbolFile.get(symbolId);
   const range = subject.newRange ?? subject.oldRange;

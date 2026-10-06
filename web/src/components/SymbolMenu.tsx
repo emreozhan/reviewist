@@ -5,6 +5,7 @@ import { menuKeyNav, usePopoverDismiss } from '../hooks/usePopoverDismiss';
 import type { OpenIntent } from '../lib/openIntent';
 import { intentOf } from '../lib/openIntent';
 import { StatusGlyph } from './StatusGlyph';
+import { modLabel } from '../lib/platform';
 
 export interface SymbolMenuItem {
   key: string;
@@ -78,7 +79,7 @@ export function SymbolMenu<T extends SymbolMenuItem>({ title, items, at, onPick,
           {item.note && <span className="smenu__note">{item.note}</span>}
         </button>
       ))}
-      <p className="smenu__hint">Tık: gözat · Shift: sekmede aç · Ctrl: arka plan sekmesi</p>
+      <p className="smenu__hint">Tık: pencerede aç · Shift: sekmede aç · {modLabel}: arka plan sekmesi</p>
     </div>
   );
 }

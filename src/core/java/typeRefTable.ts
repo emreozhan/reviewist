@@ -1,5 +1,5 @@
 /**
- * (Tur 4) Tip referansı konum tablosu: JavaFileModel.typeRefPositions'ın sıkıştırılmış biçimi ve çözücüsü.
+ * Tip referansı konum tablosu: JavaFileModel.typeRefPositions'ın sıkıştırılmış biçimi ve çözücüsü.
  * Büyük repolarda (guava) dosya başına yüzlerce referans olduğundan nesne yerine Int32Array tutulur.
  */
 import type { TypeRefTable } from './model.js';

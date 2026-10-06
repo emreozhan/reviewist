@@ -5,7 +5,6 @@
  * Token asla loglanmaz, hata mesajına ya da yanıta konmaz.
  */
 import { mkdtempSync, rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
@@ -20,7 +19,7 @@ import {
   githubStableKey,
   isBinaryContent,
   LruCache,
-  resolveInside,
+  readRepoFile,
   sanitizeRepoRelPath,
   type ManagedChangeSet,
 } from './common.js';
@@ -62,7 +61,13 @@ export function parsePrUrl(input: string): PrRef {
   } catch {
     throw bad();
   }
-  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw bad();
+  if (url.protocol === 'http:') {
+    // Şifresiz bağlantıda token ve kod açık metin gider.
+    throw new SourceError(`PR adresi https ile başlamalı: '${raw}'.`, { status: 400, code: 'BAD_URL', field: 'url' });
+  }
+  if (url.protocol !== 'https:') throw bad();
+  // `https://github.com:x@evil.example/…` gibi adresler asıl sunucuyu gizler.
+  if (url.username !== '' || url.password !== '') throw bad();
   const seg = url.pathname.split('/').filter(Boolean);
   const [owner, repo, kind, num] = seg;
   if (!owner || !repo || (kind !== 'pull' && kind !== 'pulls') || !num || !/^\d+$/.test(num)) throw bad();
@@ -95,6 +100,45 @@ export function resolveGithubToken(explicit?: string, envNames: readonly string[
     if (v) return v;
   }
   return undefined;
+}
+
+/** Ortam değişkenindeki token'ın gönderilebileceği ek sunucular (GitHub Enterprise): virgülle ayrılmış alan adları. */
+export const TRUSTED_HOSTS_ENV = 'REVIEWIST_GITHUB_HOSTS';
+
+/** Ortam token'ının gönderilebileceği sunucular: github.com + REVIEWIST_GITHUB_HOSTS. */
+export function trustedGithubHosts(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const extra = (env[TRUSTED_HOSTS_ENV] ?? '')
+    .split(/[\s,;]+/)
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h !== '');
+  return new Set(['github.com', ...extra]);
+}
+
+export interface ResolvedToken {
+  token?: string;
+  /** Ortamda token var ama sunucu güvenilir listede olmadığı için gönderilmedi: değişkenin adı. */
+  withheldEnv?: string;
+}
+
+/**
+ * Belirli bir sunucu için kullanılacak token. İstekte açıkça verilen token (formda girilen) o sunucuya gönderilir;
+ * ortam değişkenindeki token ise YALNIZCA güvenilir sunuculara gider. Aksi halde yapıştırılan herhangi bir adres
+ * (ör. `github.com.evil.example`) GITHUB_TOKEN'ı ele geçirebilirdi.
+ */
+export function resolveGithubTokenFor(
+  host: string,
+  explicit?: string,
+  envNames: readonly string[] = DEFAULT_TOKEN_ENVS,
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedToken {
+  const e = explicit?.trim();
+  if (e) return { token: e };
+  for (const name of envNames) {
+    const v = env[name]?.trim();
+    if (!v) continue;
+    return trustedGithubHosts(env).has(host.toLowerCase()) ? { token: v } : { withheldEnv: name };
+  }
+  return {};
 }
 
 /** Git remote adresinden host/sahip/depo çıkarır (https, ssh://, scp tarzı git@host:o/r). */
@@ -153,31 +197,45 @@ async function readErrorMessage(res: Response): Promise<string | undefined> {
 }
 
 export class GitHubClient {
+  private readonly apiOrigin: string;
+
   constructor(
     readonly pr: PrRef,
     private readonly token: string | undefined,
-  ) {}
+    /** Ortam token'ı bu sunucuya gönderilmediyse (güvenilir değil) değişkenin adı; hata iletilerine ipucu eklenir. */
+    private readonly withheldEnv?: string,
+  ) {
+    this.apiOrigin = new URL(pr.apiBase).origin;
+  }
 
   get hasToken(): boolean {
     return this.token !== undefined;
   }
 
-  private headers(accept: string): Record<string, string> {
+  private headers(accept: string, withAuth: boolean): Record<string, string> {
     const h: Record<string, string> = {
       Accept: accept,
       'X-GitHub-Api-Version': API_VERSION,
       'User-Agent': USER_AGENT,
     };
-    if (this.token) h.Authorization = `Bearer ${this.token}`;
+    if (withAuth && this.token) h.Authorization = `Bearer ${this.token}`;
     return h;
   }
 
   /** İsteği yapar; ok değilse (ve allow listesinde değilse) Türkçe SourceError fırlatır. */
   async request(path: string, opts: { accept?: string; allowStatus?: number[] } = {}): Promise<Response> {
     const url = path.startsWith('http') ? path : `${this.pr.apiBase}${path}`;
+    // Token yalnızca API'nin kendi origin'ine gider (mutlak adresle başka bir sunucuya taşınmaz). Yönlendirmelerde
+    // (ör. tarball → codeload) fetch, farklı origin'e geçerken Authorization başlığını kendisi düşürür.
+    let sameOrigin = false;
+    try {
+      sameOrigin = new URL(url).origin === this.apiOrigin;
+    } catch {
+      sameOrigin = false;
+    }
     let res: Response;
     try {
-      res = await fetch(url, { headers: this.headers(opts.accept ?? 'application/vnd.github+json'), redirect: 'follow' });
+      res = await fetch(url, { headers: this.headers(opts.accept ?? 'application/vnd.github+json', sameOrigin), redirect: 'follow' });
     } catch (err) {
       throw new SourceError("GitHub'a bağlanılamadı. Ağ bağlantısını ve adresi kontrol edin.", {
         status: 502,
@@ -219,16 +277,21 @@ export class GitHubClient {
         detail: reset !== undefined && Number.isFinite(reset) ? `${detail} (reset: ${new Date(reset * 1000).toISOString()})` : detail,
       });
     }
+    // Ortam token'ı güvenilir olmayan sunucuya gönderilmediyse kullanıcıya nedenini ve çözümünü söyle.
+    const withheld = this.withheldEnv
+      ? ` Not: ${this.withheldEnv} ortam değişkenindeki token, ${this.pr.host} güvenilir sunucu listesinde olmadığı için gönderilmedi. ` +
+        `Bu bir GitHub Enterprise sunucusuysa ${TRUSTED_HOSTS_ENV}=${this.pr.host} ayarlayın ya da token'ı formda girin.`
+      : '';
     if (res.status === 403) {
       const msg = this.hasToken
         ? `GitHub erişimi reddedildi (403): ${prName}. Token'ın bu depoya okuma izni (Contents ve Pull requests: read) olmalı.`
-        : `GitHub erişimi reddedildi (403): ${prName}. Bu depo için token gerekli; GITHUB_TOKEN ortam değişkenini ayarlayın.`;
+        : `GitHub erişimi reddedildi (403): ${prName}. Bu depo için token gerekli; GITHUB_TOKEN ortam değişkenini ayarlayın.${withheld}`;
       return new SourceError(msg, { status: 403, code: 'GITHUB_FORBIDDEN', detail, field: 'token' });
     }
     if (res.status === 404) {
       const msg = this.hasToken
         ? `PR bulunamadı: ${prName}. PR numarasını ve token'ın bu depoya erişimi olduğunu kontrol edin.`
-        : `PR bulunamadı: ${prName}. PR yok ya da depo özel; özel depolar için GITHUB_TOKEN (ya da GH_TOKEN) ortam değişkenini ayarlayın.`;
+        : `PR bulunamadı: ${prName}. PR yok ya da depo özel; özel depolar için GITHUB_TOKEN (ya da GH_TOKEN) ortam değişkenini ayarlayın.${withheld}`;
       return new SourceError(msg, { status: 404, code: 'GITHUB_NOT_FOUND', detail, field: 'url' });
     }
     return new SourceError(`GitHub API hatası (HTTP ${res.status}).`, { status: 502, code: 'GITHUB_FAILED', detail });
@@ -335,6 +398,10 @@ export interface GithubChangeSetOptions {
 
 export const MAX_PR_FILES = 3000;
 export const MAX_TARBALL_BYTES = 200 * 1024 * 1024;
+/** Arşivden diske açılan .java içeriğinin üst sınırı (sıkıştırılmış 200 MB çok daha büyüğe açılabilir). */
+export const MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024;
+/** Arşivde listelenen en fazla dosya. */
+export const MAX_TARBALL_ENTRIES = 300_000;
 const MAX_SYNTH_PATCH_FILES = 20;
 
 function prInfo(pr: PrRef, meta: GhPull): ReviewSourceInfo {
@@ -356,8 +423,8 @@ function prInfo(pr: PrRef, meta: GhPull): ReviewSourceInfo {
 
 export async function createGithubChangeSet(opts: GithubChangeSetOptions): Promise<ManagedChangeSet> {
   const pr = parsePrUrl(opts.url);
-  const token = resolveGithubToken(opts.token, opts.tokenEnvNames ?? DEFAULT_TOKEN_ENVS);
-  const client = new GitHubClient(pr, token);
+  const auth = resolveGithubTokenFor(pr.host, opts.token, opts.tokenEnvNames ?? DEFAULT_TOKEN_ENVS);
+  const client = new GitHubClient(pr, auth.token, auth.withheldEnv);
   const progress = opts.onProgress ?? (() => undefined);
   const base = `/repos/${pr.owner}/${pr.repo}`;
 
@@ -365,6 +432,12 @@ export async function createGithubChangeSet(opts: GithubChangeSetOptions): Promi
   const meta = parseApi(pullSchema, await client.json(`${base}/pulls/${pr.number}`), 'pull request');
   const info = prInfo(pr, meta);
   const warnings: string[] = [];
+  if (auth.withheldEnv) {
+    warnings.push(
+      `${auth.withheldEnv} ortam değişkenindeki token ${pr.host} sunucusuna gönderilmedi (güvenilir sunucu listesinde değil; ` +
+        `GitHub Enterprise için ${TRUSTED_HOSTS_ENV}=${pr.host} ayarlayın).`,
+    );
+  }
 
   if (opts.localRepoPath) {
     const local = await tryLocalRepo(pr, meta, info, opts.localRepoPath, warnings, progress);
@@ -402,20 +475,22 @@ async function tryLocalRepo(
     warnings.push(`Yerel depo (${top}) bu PR'ın deposuna (${pr.owner}/${pr.repo}) ait değil; GitHub API kullanılıyor.`);
     return undefined;
   }
+  // Uzak adı depo yapılandırmasından gelir: seçenek gibi yorumlanabilecek (`-` ile başlayan) ya da olağandışı adlar kullanılmaz.
+  if (!/^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/.test(remote.name)) {
+    warnings.push(`Yerel depodaki uzak adı (${remote.name}) güvenli değil; GitHub API kullanılıyor.`);
+    return undefined;
+  }
   const prRef = `refs/reviewist/pr-${pr.number}`;
+  // Alt modüller getirilmez; `ext::` taşıyıcısı (komut çalıştırır) kapalıdır.
+  const fetchArgs = ['fetch', '--no-tags', '--quiet', '--no-recurse-submodules'];
+  const fetchOpts = { timeoutMs: 300_000, config: { 'protocol.ext.allow': 'never' } };
   try {
     progress(`git fetch ${remote.name} pull/${pr.number}/head`);
-    await runGit(top, ['fetch', '--no-tags', '--quiet', remote.name, `+refs/pull/${pr.number}/head:${prRef}`], {
-      timeoutMs: 300_000,
-    });
+    await runGit(top, [...fetchArgs, remote.name, `+refs/pull/${pr.number}/head:${prRef}`], fetchOpts);
     const hasBase = await runGitResult(top, ['cat-file', '-e', `${meta.base.sha}^{commit}`]);
     if (hasBase.code !== 0) {
       progress(`git fetch ${remote.name} ${meta.base.ref}`);
-      await runGit(
-        top,
-        ['fetch', '--no-tags', '--quiet', remote.name, `+refs/heads/${meta.base.ref}:${prRef}-base`],
-        { timeoutMs: 300_000 },
-      );
+      await runGit(top, [...fetchArgs, remote.name, `+refs/heads/${meta.base.ref}:${prRef}-base`], fetchOpts);
     }
     const hasHead = await runGitResult(top, ['cat-file', '-e', `${meta.head.sha}^{commit}`]);
     const hasBase2 = await runGitResult(top, ['cat-file', '-e', `${meta.base.sha}^{commit}`]);
@@ -502,8 +577,8 @@ async function createApiChangeSet(
       try {
         let buf: Buffer | undefined;
         if (sha === headSha && tarballDone?.extracted.has(path)) {
-          const abs = resolveInside(tarballDone.dir, path);
-          if (abs) buf = await readFile(abs).catch(() => undefined);
+          // Arşivden çıkan sembolik bağlar izlenmez; yol çıkarma klasörünün dışına çıkamaz.
+          buf = await readRepoFile(tarballDone.dir, path);
         }
         if (buf === undefined) {
           const encoded = path.split('/').map(encodeURIComponent).join('/');
@@ -576,6 +651,10 @@ async function createApiChangeSet(
       const paths: string[] = [];
       const extracted = new Set<string>();
       let prefix: string | undefined;
+      let extractedBytes = 0;
+      let skippedForSize = 0;
+      // Yalnız normal dosyalar (sembolik/sabit bağ yok) ve yalnız .java çıkarılır; tar paketi mutlak yolları ve `..`
+      // içerenleri kendisi reddeder. Açılmış boyut ve dosya sayısı sınırlıdır (sıkıştırma bombasına karşı).
       const unpack = tarExtract({
         cwd: dir,
         filter: (p: string, entry: unknown) => {
@@ -584,10 +663,20 @@ async function createApiChangeSet(
           if (slash < 0) return false;
           prefix ??= norm.slice(0, slash);
           const rel = norm.slice(slash + 1);
-          const type = (entry as Partial<ReadEntry>).type;
-          if (!rel || (type !== 'File' && type !== 'OldFile' && type !== 'ContiguousFile')) return false;
+          const e = entry as Partial<ReadEntry>;
+          if (!rel || (e.type !== 'File' && e.type !== 'OldFile' && e.type !== 'ContiguousFile')) return false;
+          if (paths.length >= MAX_TARBALL_ENTRIES) {
+            skippedForSize++;
+            return false;
+          }
           paths.push(rel);
           if (rel.toLowerCase().endsWith('.java')) {
+            const size = typeof e.size === 'number' ? e.size : 0;
+            if (extractedBytes + size > MAX_EXTRACTED_BYTES) {
+              skippedForSize++;
+              return false;
+            }
+            extractedBytes += size;
             extracted.add(rel);
             return true;
           }
@@ -618,6 +707,11 @@ async function createApiChangeSet(
       }
       unpack.end();
       await done;
+      if (skippedForSize > 0) {
+        warnings.push(
+          `Depo arşivi çok büyük: ${skippedForSize} dosya indekse alınmadı (açılmış .java sınırı ${Math.round(MAX_EXTRACTED_BYTES / 1024 / 1024)} MB, dosya sınırı ${MAX_TARBALL_ENTRIES}).`,
+        );
+      }
       const result: TarballResult = { dir: join(dir, prefix ?? ''), paths, extracted };
       tarballDone = result;
       progress(`Depo arşivi açıldı: ${paths.length} dosya (${(total / 1024 / 1024).toFixed(1)} MB)`);
@@ -657,6 +751,11 @@ async function createApiChangeSet(
       return await fetchContent(side === 'old' ? oldSha : headSha, t.path);
     },
     async listFiles(_side, ext) {
+      // Repo geneli liste yalnız Java analizi (çağıran/alt sınıf indeksi) için gerekir: PR'da Java değişikliği
+      // yoksa arşiv hiç indirilmez.
+      if (!files.some((f) => f.path.toLowerCase().endsWith('.java') || f.oldPath?.toLowerCase().endsWith('.java'))) {
+        return filterByExt(changedNewPaths(), ext);
+      }
       tarball ??= loadTarball();
       const t = await tarball;
       return filterByExt(t ? t.paths : changedNewPaths(), ext);

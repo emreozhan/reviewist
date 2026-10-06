@@ -1,12 +1,13 @@
 /**
- * Çağrı argümanlarının statik tip çıkarımı ve parametre tipiyle uyumluluk (B8: overload seçimi; analiz şeridi için de ortak).
+ * Çağrı argümanlarının statik tip çıkarımı ve parametre tipiyle uyumluluk (overload seçimi; analiz katmanı da kullanır).
  * `src/core/analysis/argTypes.ts` ile aynı dışa açık imzalar (inferArgType, argCompatibility, typeVarsOf) + genişletmeler:
  *  - `null` literali, `X.class`, string birleştirme, dizi oluşturma, tip değişkeni tipli yereller (bilinmiyor sayılır)
  *  - dizi uyumu (eleman tipine göre), yaygın JDK tiplerinin üst tip tablosu (List -> Collection -> Iterable ...)
  * Emin olunamayan her durumda 'unknown' / undefined döner.
  */
 import type { JavaFileModel, JavaMember, JavaType, RepoIndexApi } from './model.js';
-import { eraseTypeForId, typeParamNames } from './names.js';
+import { eraseTypeForId, splitArraySuffix, typeParamNames } from './names.js';
+import { ID_PART_CHARS, IDENT, IDENT_EXACT_RE } from './names.js';
 
 export type Compat = 'ok' | 'mismatch' | 'unknown';
 
@@ -121,11 +122,13 @@ const INT_RE = /^-?(?:0[xX][\da-fA-F_]+|0[bB][01_]+|\d[\d_]*)$/;
 const LONG_RE = /^-?(?:0[xX][\da-fA-F_]+|0[bB][01_]+|\d[\d_]*)[lL]$/;
 const FLOAT_RE = /^-?(?:\d[\d_]*\.?\d*|\.\d+)(?:[eE][+-]?\d+)?[fF]$/;
 const DOUBLE_RE = /^-?(?:(?:\d[\d_]*\.\d*|\.\d+)(?:[eE][+-]?\d+)?[dD]?|\d[\d_]*(?:[eE][+-]?\d+)[dD]?|\d[\d_]*[dD])$/;
-const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
-const NEW_RE = /^new\s+([\w$.]+)\s*(?:<[^()]*>)?\s*\(/;
-const NEW_ARRAY_RE = /^new\s+([\w$.]+)\s*(?:<[^()]*>)?\s*((?:\[[^\]]*\]\s*)+)(?:\{.*)?$/;
-const CAST_RE = /^\(\s*([\w$.]+(?:\s*<[^()]*>)?(?:\s*\[\s*\])*)\s*\)\s*[\w$"'(]/;
-const CLASS_LIT_RE = /^[\w$.]+(?:\s*\[\s*\])*\s*\.\s*class$/;
+const IDENT_RE = IDENT_EXACT_RE;
+const QN = `[${ID_PART_CHARS}.]+`;
+const NEW_RE = new RegExp(`^new\\s+(${QN})\\s*(?:<[^()]*>)?\\s*\\(`, 'u');
+const NEW_ARRAY_RE = new RegExp(`^new\\s+(${QN})\\s*(?:<[^()]*>)?\\s*((?:\\[[^\\]]*\\]\\s*)+)(?:\\{.*)?$`, 'u');
+const CAST_RE = new RegExp(`^\\(\\s*(${QN}(?:\\s*<[^()]*>)?(?:\\s*\\[\\s*\\])*)\\s*\\)\\s*[${ID_PART_CHARS}"'(]`, 'u');
+const CLASS_LIT_RE = new RegExp(`^${QN}(?:\\s*\\[\\s*\\])*\\s*\\.\\s*class$`, 'u');
+const THIS_FIELD_RE = new RegExp(`^this\\.(${IDENT})$`, 'u');
 
 /** Basit (ilk düzey) string birleştirmesi: üst düzeyde '+' var ve işlenenlerden biri string literal. */
 function isStringConcat(t: string): boolean {
@@ -183,7 +186,7 @@ export function inferArgType(
   const declaredType = (declared: string | undefined): string | undefined => {
     if (!declared) return undefined;
     const erased = eraseTypeForId(declared);
-    const base = erased.replace(/(\[\]|\.\.\.)+$/, '');
+    const base = splitArraySuffix(erased).base;
     if (caller && typeVarsOf(caller, callerType).has(base)) return undefined;
     return erased.endsWith('...') ? `${erased.slice(0, -3)}[]` : erased;
   };
@@ -191,7 +194,7 @@ export function inferArgType(
     const declared = caller?.localTypes[t] ?? callerType?.fieldTypes[t] ?? lookupField?.(t);
     return declaredType(declared);
   }
-  const thisField = /^this\.([A-Za-z_$][\w$]*)$/.exec(t);
+  const thisField = THIS_FIELD_RE.exec(t);
   if (thisField?.[1]) {
     const declared = callerType?.fieldTypes[thisField[1]] ?? lookupField?.(thisField[1]);
     return declaredType(declared);

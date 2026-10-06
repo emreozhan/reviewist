@@ -1,6 +1,6 @@
 /**
  * Testler için JavaMember / JavaType / JavaFileModel / MemberDiff / TypeDiff kurucuları.
- * A1 (parser/semanticDiff) olmadan analiz fonksiyonlarını elle kurulmuş modellerle test etmeye yarar.
+ * Ayrıştırıcı ve semantik diff olmadan analiz fonksiyonlarını elle kurulmuş modellerle test etmeye yarar.
  */
 import type { ChangeFlag, ChangeStatus, MemberChange, TypeChange } from '../../shared/types.js';
 import type { CodeFeatures, JavaFileModel, JavaImport, JavaMember, JavaType, MemberDiff, TypeDiff } from '../java/model.js';

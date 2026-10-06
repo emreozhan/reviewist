@@ -1,5 +1,5 @@
 /**
- * (Tur 4) Kod gezinme: dosya özeti (FileOutline: bildirimler + tıklanabilir referanslar) ve sembol konumu (SymbolLocation).
+ * Kod gezinme: dosya özeti (FileOutline: bildirimler + tıklanabilir referanslar) ve sembol konumu (SymbolLocation).
  *
  * Girdi: ReviewModel + review'un analiz artefaktları (buildReview `onArtifacts` ya da `buildArtifacts`).
  * Dönen tüm id'ler ReviewModel biçimindedir (çift FQN'de '@kök' soneki dahil). Artefakt modelleri ayrıştırma önbelleğiyle

@@ -22,7 +22,7 @@ export interface SymbolIds {
 }
 
 /**
- * Dosyanın kaynak kökü (A1 `sourceRootOf` ile aynı kural; RepoIndex'in kaynak kökü tercihiyle tutarlı):
+ * Dosyanın kaynak kökü (`sourceRootOf` ile aynı kural; RepoIndex'in kaynak kökü tercihiyle tutarlı):
  * `android/guava/src/com/google/common/base/X.java` + `com.google.common.base` → `android/guava/src`.
  * Repo kökündeyse '.' (id sonekinde boş kalmasın diye).
  */

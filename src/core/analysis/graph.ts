@@ -8,6 +8,7 @@ import type { CallRef, FileChange, ImpactEdge, ImpactGraph, ImpactNode, Layer, R
 import type { RepoIndexApi, TypeDiff } from '../java/model.js';
 import { isSemanticChange } from './risk.js';
 import { maxLevel, RISK_LEVEL_ORDER, simpleTypeName, symbolLabel } from './util.js';
+import { compareStrings } from '../compare.js';
 
 export const MAX_GRAPH_NODES = 600;
 
@@ -185,12 +186,12 @@ export function buildGraph(input: GraphInput): GraphResult {
   if (keptNodes.length > max) {
     truncatedFrom = keptNodes.length;
     keptNodes = keptNodes
-      .sort((a, b) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || a.id.localeCompare(b.id))
+      .sort((a, b) => (score.get(b.id) ?? 0) - (score.get(a.id) ?? 0) || RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || compareStrings(a.id, b.id))
       .slice(0, max);
   }
   const keep = new Set(keptNodes.map((n) => n.id));
-  keptNodes.sort((a, b) => a.id.localeCompare(b.id));
-  const keptEdges = [...edges.values()].filter((e) => keep.has(e.from) && keep.has(e.to)).sort((a, b) => a.id.localeCompare(b.id));
+  keptNodes.sort((a, b) => compareStrings(a.id, b.id));
+  const keptEdges = [...edges.values()].filter((e) => keep.has(e.from) && keep.has(e.to)).sort((a, b) => compareStrings(a.id, b.id));
   return { graph: { nodes: keptNodes, edges: keptEdges }, impactedOutsideDiff, truncatedFrom };
 }
 

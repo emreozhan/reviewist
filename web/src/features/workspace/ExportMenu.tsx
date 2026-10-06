@@ -47,7 +47,7 @@ export function ExportMenu() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `review-${(review.source.headSha ?? review.id).slice(0, 12)}.md`;
+    a.download = `inceleme-${(review.source.headSha ?? review.id).slice(0, 12)}.md`;
     a.click();
     URL.revokeObjectURL(url);
     setStatus('İndirildi');

@@ -32,6 +32,8 @@ interface UiState {
   focusLine: FocusLine | null;
   graphFilter: GraphFilter | null;
   searchFocusTick: number;
+  /** İşlenmiş son arama odağı isteği (odak isteği tek seferliktir; arama kutusu yeniden bağlanınca tekrar odaklanmaz). */
+  searchFocusHandled: number;
   /**
    * Her dosya/sembol seçiminde (aynı değer tekrar seçilse de) artar: sekme senkronu gezginden gelen
    * seçimi önizleme sekmesine çevirmek için bunu izler.
@@ -57,6 +59,8 @@ interface UiState {
   setHelpOpen: (open: boolean) => void;
   setGraphFilter: (f: GraphFilter) => void;
   focusSearch: () => void;
+  /** Bekleyen arama odağı isteğini tüketir: bekleyen istek varsa true (yalnız bir kez). */
+  consumeSearchFocus: () => boolean;
 }
 
 /** Odak istekleri için tekil sayaç (temizlendikten sonra da artmaya devam eder; tablo aynı tick'i iki kez işlemez). */
@@ -79,11 +83,24 @@ export const useUi = create<UiState>((set, get) => ({
   focusLine: null,
   graphFilter: null,
   searchFocusTick: 0,
+  searchFocusHandled: 0,
   selectionSeq: 0,
 
   resetForReview: (reviewId) => {
     if (get().reviewId === reviewId) return;
-    set({ reviewId, selectedFileId: null, selectedSymbolId: null, centerView: null, focusLine: null, graphFilter: null, openFolds: {} });
+    // Arama metni ve filtreler incelemeye özgüdür: başka incelemeye taşınmaz.
+    set((s) => ({
+      reviewId,
+      selectedFileId: null,
+      selectedSymbolId: null,
+      centerView: null,
+      focusLine: null,
+      graphFilter: null,
+      openFolds: {},
+      filters: DEFAULT_FILTERS,
+      findingFilter: DEFAULT_FINDING_FILTER,
+      searchFocusHandled: s.searchFocusTick,
+    }));
   },
   // Dosya seçimi yeni bir okuma niyetidir: bekleyen satır odağı düşer (j/k ile dönünce eski satıra kaymaz).
   selectFile: (fileId, opts) =>
@@ -134,5 +151,11 @@ export const useUi = create<UiState>((set, get) => ({
     layout.setCollapsed('nav', false);
     layout.setFocusMode(false);
     set((s) => ({ searchFocusTick: s.searchFocusTick + 1 }));
+  },
+  consumeSearchFocus: () => {
+    const { searchFocusTick, searchFocusHandled } = get();
+    if (searchFocusTick <= searchFocusHandled) return false;
+    set({ searchFocusHandled: searchFocusTick });
+    return true;
   },
 }));

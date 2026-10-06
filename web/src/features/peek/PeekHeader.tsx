@@ -6,6 +6,7 @@ import { KIND_LABEL } from '../../lib/labels';
 import type { PeekEntry } from '../../lib/peekStack';
 import { baseName, dirName } from '../../lib/reviewIndex';
 import type { PeekMeta } from './peekMeta';
+import { BG_CLICK } from '../../lib/openIntent';
 
 interface PeekHeaderProps {
   entry: PeekEntry;
@@ -42,7 +43,7 @@ export function PeekHeader({ entry, level, active, meta, crumbs, titleId, onOpen
         {meta.risk && <RiskBadge level={meta.risk.level} score={meta.risk.score} compact />}
         <span className="peek__spacer" />
         {!active && <span className="peek__back-hint">↩ tıkla: bu seviyeye dön</span>}
-        <button type="button" className="btn btn--sm btn--ghost peek__btn" title="Sekmede aç (Ctrl+tık: arka plan sekmesi)" {...linkProps(onOpenTab)}>
+        <button type="button" className="btn btn--sm btn--ghost peek__btn" title={`Sekmede aç (${BG_CLICK}: arka plan sekmesi)`} {...linkProps(onOpenTab)}>
           <Icon name="tabs" /> Sekmede aç
         </button>
         <button

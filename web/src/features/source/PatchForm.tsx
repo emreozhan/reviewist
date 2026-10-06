@@ -4,6 +4,7 @@ import { Field } from '../../components/Field';
 import { FolderPathInput } from './folderPicker/FolderPathInput';
 import type { SourceFormProps } from './GitSourceForm';
 import { serverErrorFor } from './serverFieldError';
+import { SAMPLE_REPO_PATH } from '../../lib/platform';
 
 export function PatchForm({ config, pending, onSubmit, serverError, onEdit }: SourceFormProps) {
   const [text, setText] = useState('');
@@ -25,8 +26,8 @@ export function PatchForm({ config, pending, onSubmit, serverError, onEdit }: So
       <Field id="patch-text" label="Patch" error={error} hint="git diff, git format-patch ya da PR'dan indirilen .diff içeriği.">
         <textarea id="patch-text" className="input input--mono textarea" rows={10} value={text} onChange={(e) => setText(e.target.value)} spellCheck={false} placeholder={'diff --git a/src/main/java/… b/src/main/java/…\n@@ -12,7 +12,9 @@ …'} aria-invalid={!!error || undefined} aria-describedby={error ? 'patch-text-error' : 'patch-text-hint'} />
       </Field>
-      <Field id="patch-repo" label="Repo yolu" optional error={repoError} hint="Verilirse dosya içerikleri ve diff dışındaki çağıranlar bu depodan okunur; verilmezse yalnız hunk'lar analiz edilir.">
-        <FolderPathInput id="patch-repo" value={repoPath} onChange={setRepoPath} onPicked={onEdit} placeholder={config?.defaultRepoPath ?? 'C:/projeler/shop'} invalid={!!repoError} describedBy={repoError ? 'patch-repo-error' : 'patch-repo-hint'} />
+      <Field id="patch-repo" label="Depo yolu" optional error={repoError} hint="Verilirse dosya içerikleri ve diff dışındaki çağıranlar bu depodan okunur; verilmezse yalnız hunk'lar analiz edilir.">
+        <FolderPathInput id="patch-repo" value={repoPath} onChange={setRepoPath} onPicked={onEdit} placeholder={config?.defaultRepoPath ?? SAMPLE_REPO_PATH} invalid={!!repoError} describedBy={repoError ? 'patch-repo-error' : 'patch-repo-hint'} />
       </Field>
       <div className="source-form__actions">
         <button type="submit" className="btn btn--primary btn--lg" disabled={pending}>

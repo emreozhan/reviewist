@@ -16,7 +16,7 @@ import type {
   ReceiverKind,
   Visibility,
 } from './model.js';
-import { baseTypeName, collapseWs, eraseTypeForId, simpleName, stripTypeArgs } from './names.js';
+import { baseTypeName, collapseWs, eraseTypeForId, HAS_LOWER_RE, ID_PART_CHARS, IDENT, simpleName, stripTypeArgs } from './names.js';
 import { maskedTokens, maskVarargsAnnotations } from './mask.js';
 import { getJavaParser } from './parser.js';
 import { TYPE_REF_ANNOTATION, TYPE_REF_EXPR, TypeRefTableBuilder } from './typeRefTable.js';
@@ -41,8 +41,8 @@ const ATOMIC_TOKENS = new Set(['string_literal', 'character_literal']);
 const COMMENT_TYPES = new Set(['line_comment', 'block_comment']);
 
 /** Büyük harfle başlayan Java tanımlayıcısı (Unicode: `Ödeme`). */
-const UPPER_IDENT = /^\p{Lu}[\p{L}\p{N}_$]*$/u;
-const HAS_LOWER = /\p{Ll}/u;
+const UPPER_IDENT = new RegExp(`^\\p{Lu}[${ID_PART_CHARS}]*$`, 'u');
+const HAS_LOWER = HAS_LOWER_RE;
 
 /** Satır/sütun (sütun satır içi 0 tabanlı UTF-16 kod birimi). */
 interface Pos {
@@ -250,9 +250,8 @@ class FileCtx {
     let prev = '';
     for (const t of this.toks) {
       const x = t.t;
-      const c = x.charCodeAt(0);
-      if (c >= 65 && c <= 90 && /^[A-Z][\w$]*$/.test(x)) {
-        if (!(prev === '.' && !/[a-z]/.test(x))) out.add(x);
+      if (UPPER_IDENT.test(x)) {
+        if (!(prev === '.' && !HAS_LOWER.test(x))) out.add(x);
       }
       prev = x;
     }
@@ -260,7 +259,7 @@ class FileCtx {
   }
 
   /**
-   * (Tur 4) Tip referansı konumları: tip konumundaki tanımlayıcılar (alan/parametre/dönüş/yerel tipleri, extends/implements,
+   * Tip referansı konumları: tip konumundaki tanımlayıcılar (alan/parametre/dönüş/yerel tipleri, extends/implements,
    * `new X`, cast, `X.class`, generic argümanları, throws, catch) + tokenlardan ifade konumundaki büyük harfli adlar
    * (`Foo.bar()`, `Foo.CONST`, `Foo::x` alıcısı; `Outer.Inner.x()` zinciri) ve anotasyon adları (maskelenenler dahil).
    */
@@ -373,8 +372,7 @@ function rangeOf(n: Node): Range {
 }
 
 function childOfType(n: Node, type: string): Node | null {
-  for (let i = 0; i < n.childCount; i++) {
-    const ch = n.child(i);
+  for (const ch of n.children) {
     if (ch && ch.type === type) return ch;
   }
   return null;
@@ -382,8 +380,7 @@ function childOfType(n: Node, type: string): Node | null {
 
 function namedNonComment(n: Node): Node[] {
   const out: Node[] = [];
-  for (let i = 0; i < n.namedChildCount; i++) {
-    const ch = n.namedChild(i);
+  for (const ch of n.namedChildren) {
     if (ch && !COMMENT_TYPES.has(ch.type)) out.push(ch);
   }
   return out;
@@ -419,7 +416,19 @@ function emptyFeatures(): CodeFeatures {
   };
 }
 
-const SQL_RE = /\b(select|insert|update|delete)\b[\s\S]*\b(from|into|set|where)\b/i;
+const SQL_VERB_RE = /\b(?:select|insert|update|delete)\b/i;
+const SQL_CLAUSE_RE = /\b(?:from|into|set|where)\b/gi;
+
+/**
+ * Literal SQL içeriyor mu: bir SQL fiilinden (select/insert/update/delete) sonra from/into/set/where geçiyor.
+ * İki doğrusal arama (tek desenle `fiil[\s\S]*yan_cümle` uzun girdide ikinci dereceden geri izleme yapar).
+ */
+export function looksLikeSql(text: string): boolean {
+  const verb = SQL_VERB_RE.exec(text);
+  if (!verb) return false;
+  SQL_CLAUSE_RE.lastIndex = verb.index + verb[0].length;
+  return SQL_CLAUSE_RE.test(text);
+}
 const TODO_RE = /\b(TODO|FIXME)\b/;
 
 interface Analysis {
@@ -541,7 +550,7 @@ const COUNTED = new Set([
   'synchronized_statement',
 ]);
 
-/** `Objects` üzerinde null güvenli / null denetleyen metotlar (B10). */
+/** `Objects` üzerinde null güvenli / null denetleyen metotlar. */
 const NULL_SAFE_OBJECTS = new Set([
   'requireNonNull',
   'requireNonNullElse',
@@ -571,7 +580,7 @@ function setSiteName(ctx: FileCtx, site: CallSite, s: number, e: number): void {
   if (p.line !== site.line) site.nameLine = p.line;
 }
 
-const LAST_IDENT = /([\p{L}_$][\p{L}\p{N}_$]*)\s*$/u;
+const LAST_IDENT = new RegExp(`(${IDENT})\\s*$`, 'u');
 
 /** `new a.b.Foo<X>()` tip düğümünde basit tip adının [s, e) aralığı. */
 function typeNameSpan(ctx: FileCtx, t: Node): { s: number; e: number } | undefined {
@@ -633,8 +642,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       const recv = kids[0] ?? null;
       let isCtor = false;
       let newNode: Node | null = null;
-      for (let i = 0; i < n.childCount; i++) {
-        const ch = n.child(i);
+      for (const ch of n.children) {
         if (ch?.type === 'new') {
           isCtor = true;
           newNode = ch;
@@ -768,7 +776,7 @@ function visitNode(n: Node, ctx: FileCtx, a: Analysis, owner: OwnerInfo): void {
       return;
     }
     case 'string_literal': {
-      if (SQL_RE.test(ctx.slice(n))) a.features.sqlStrings++;
+      if (looksLikeSql(ctx.slice(n))) a.features.sqlStrings++;
       return;
     }
     case 'return_statement': {
@@ -809,8 +817,7 @@ interface ModInfo {
 function readModifiers(ctx: FileCtx, n: Node | null): ModInfo {
   const info: ModInfo = { modifiers: [], annotations: [] };
   if (!n) return info;
-  for (let i = 0; i < n.childCount; i++) {
-    const ch = n.child(i);
+  for (const ch of n.children) {
     if (!ch || COMMENT_TYPES.has(ch.type)) continue;
     if (ch.type === 'marker_annotation' || ch.type === 'annotation') info.annotations.push(collapseWs(ctx.slice(ch)));
     else info.modifiers.push(ctx.slice(ch));
@@ -903,6 +910,38 @@ function buildSignature(parts: {
 
 function methodId(owner: string, name: string, params: JavaParam[]): string {
   return `${owner}#${name}(${params.map((p) => eraseTypeForId(p.type)).join(',')})`;
+}
+
+/**
+ * Aynı tipte aynı id'yi alan metot/yapıcılar (`fmt(java.util.Date)` ↔ `fmt(java.sql.Date)`, `A.Builder` ↔ `B.Builder`
+ * parametreleri) haritalarda birbirini ezmesin diye ayrıştırılır. Yalnız çakışan gruba dokunulur (çakışma yoksa id
+ * biçimi değişmez): her üyenin parametreleri kaynakta yazıldığı nitelikle (`java.sql.Date`) yazılır; yine aynı kalanlara
+ * kaynak sırasıyla `~2`, `~3` ... soneki eklenir (ilk üye soneksiz).
+ */
+function disambiguateMemberIds(type: JavaType): void {
+  const groups = new Map<string, JavaMember[]>();
+  for (const m of type.members) {
+    if (m.kind !== 'method' && m.kind !== 'constructor') continue;
+    const g = groups.get(m.id);
+    if (g) g.push(m);
+    else groups.set(m.id, [m]);
+  }
+  for (const group of groups.values()) {
+    if (group.length < 2) continue;
+    const taken = new Set<string>();
+    for (const m of group) {
+      const qualified = `${m.ownerFqn}#${m.name}(${m.params.map((p) => qualifiedTypeForId(p.type)).join(',')})`;
+      let id = qualified;
+      for (let n = 2; taken.has(id); n++) id = `${qualified}~${n}`;
+      taken.add(id);
+      m.id = id;
+    }
+  }
+}
+
+/** Id için nitelikli parametre tipi: generic/annotation silinmiş, kaynakta yazıldığı nitelik ve `[]`/`...` korunur. */
+function qualifiedTypeForId(text: string): string {
+  return stripTypeArgs(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -1317,6 +1356,7 @@ function extractType(
     }
   };
   for (const ch of namedNonComment(body)) handle(ch);
+  disambiguateMemberIds(type);
 
   for (const m of type.members) {
     if ((m.kind === 'field' || m.kind === 'enumConstant') && m.fieldType) type.fieldTypes[m.name] = m.fieldType;
@@ -1327,8 +1367,7 @@ function readImport(ctx: FileCtx, n: Node): JavaImport {
   let isStatic = false;
   let wildcard = false;
   let name = '';
-  for (let i = 0; i < n.childCount; i++) {
-    const ch = n.child(i);
+  for (const ch of n.children) {
     if (!ch) continue;
     if (ch.type === 'static') isStatic = true;
     else if (ch.type === 'asterisk') wildcard = true;
@@ -1342,8 +1381,7 @@ function collectErrorLines(root: Node): number[] {
   const visit = (n: Node): void => {
     if (n.isError || n.isMissing) lines.add(n.startPosition.row + 1);
     if (!n.hasError && !n.isMissing) return;
-    for (let i = 0; i < n.childCount; i++) {
-      const ch = n.child(i);
+    for (const ch of n.children) {
       if (ch && (ch.hasError || ch.isMissing || ch.isError)) visit(ch);
     }
   };
@@ -1371,7 +1409,7 @@ export async function parseJavaFile(path: string, source: string): Promise<JavaF
     lineCount: countLines(source),
     normalizedCode: '',
   };
-  // B4: tree-sitter-java'nın desteklemediği varargs tip anotasyonları aynı uzunlukta boşlukla maskelenir (her zaman,
+  // tree-sitter-java'nın desteklemediği varargs tip anotasyonları aynı uzunlukta boşlukla maskelenir (her zaman,
   // içerik deterministik). Ham metinler (text, imza, parametre) orijinal kaynaktan dilimlenir; maskelenen tokenlar
   // normalizasyona geri eklenir.
   const masked = maskVarargsAnnotations(source);

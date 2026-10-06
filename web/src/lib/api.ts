@@ -134,12 +134,14 @@ export function getApi(mock: boolean): ReviewApi {
 
 /** Hata için kullanıcıyı yönlendiren kısa Türkçe ipucu. */
 export function errorHint(error: ApiRequestError): string {
-  if (error.kind === 'unreachable') return 'Sunucuyu `npm run dev:server` (veya `npx reviewist`) ile başlatın; ya da örnek veriyle devam edin.';
+  if (error.kind === 'unreachable') return 'Sunucuyu proje klasöründe `node bin/reviewist.js` ile başlatın; ya da örnek veriyle devam edin.';
   if (error.kind === 'aborted') return 'Analizi yeniden başlatabilirsiniz.';
   if (error.kind === 'analysis') return error.field ? 'İlgili form alanını düzeltip tekrar deneyin.' : 'Analiz sunucuda tamamlanamadı. Ayrıntı aşağıda ve sunucu günlüğünde.';
-  if (error.status === 400 || error.status === 422) return 'Formdaki alanları kontrol edin: repo yolu, ref adları veya URL geçerli olmalı.';
-  if (error.status === 401 || error.status === 403) return 'Erişim reddedildi: GitHub token\'ının bu depoya okuma izni olduğundan emin olun.';
-  if (error.status === 404) return 'İstenen kayıt bulunamadı: repo yolu, ref ya da review kimliği yanlış olabilir.';
+  if (error.status === 400 || error.status === 422) return 'Formdaki alanları kontrol edin: depo yolu, ref adları veya URL geçerli olmalı.';
+  if (error.status === 401) return 'Kimlik doğrulanamadı: GitHub token\'ının geçerli olduğundan ve bu depoya okuma izni olduğundan emin olun.';
+  if (error.status === 403)
+    return 'Erişim reddedildi. Reviewist yalnız kendi adresinden gelen istekleri kabul eder: arayüzü sunucunun yazdığı adresten (ör. http://127.0.0.1:4317) açın. GitHub PR analizinde ise token\'ın depoya okuma izni olmalı.';
+  if (error.status === 404) return 'İstenen kayıt bulunamadı: depo yolu, ref ya da inceleme kimliği yanlış olabilir.';
   if (error.status && error.status >= 500) return 'Analiz sırasında sunucuda hata oluştu. Ayrıntıyı sunucu günlüğünde görebilirsiniz.';
   return 'Girdileri kontrol edip tekrar deneyin.';
 }

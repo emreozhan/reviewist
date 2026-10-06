@@ -18,7 +18,7 @@ export function NoteEditor({ noteKey, label }: NoteEditorProps) {
         className="input textarea note__input"
         rows={3}
         value={value}
-        placeholder="Review notu… (Markdown olarak dışa aktarılır)"
+        placeholder="İnceleme notu… (Markdown olarak dışa aktarılır)"
         onChange={(e) => setNote(noteKey, e.target.value)}
       />
       <p className="note__status" aria-live="polite">

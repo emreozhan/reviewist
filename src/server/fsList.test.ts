@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join, parse } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ApiError, FsListing } from '../shared/types.js';
 import { createApp } from './app.js';
@@ -113,9 +113,18 @@ describe('listDirectory', () => {
     expect(isHiddenName('src', 'win32')).toBe(false);
     expect(compareNames('ı', 'i')).toBeLessThan(0);
     expect(() => normalizeRequestPath('göreli/yol', homedir())).toThrow(/mutlak/);
-    expect(() => normalizeRequestPath('\\\\sunucu\\pay', homedir())).toThrow(/Ağ yolları/);
-    expect(() => normalizeRequestPath('//sunucu/pay', homedir())).toThrow(/Ağ yolları/);
+    expect(normalizeRequestPath('~', homedir())).toBe(resolve(homedir()));
+    expect(normalizeRequestPath('~/code', homedir())).toBe(resolve(homedir(), 'code'));
+    // macOS/Linux: kökteki sistem klasörleri ve ev dizinindeki Library gizlidir; başka yerde değil
+    expect(isHiddenName('usr', 'darwin', { atRoot: true })).toBe(true);
+    expect(isHiddenName('usr', 'darwin', { atRoot: false })).toBe(false);
+    expect(isHiddenName('Library', 'darwin', { atHome: true })).toBe(true);
+    expect(isHiddenName('Library', 'darwin', { atHome: false })).toBe(false);
+    expect(isHiddenName('proc', 'linux', { atRoot: true })).toBe(true);
+    expect(isHiddenName('Users', 'darwin', { atRoot: true })).toBe(false);
     if (process.platform === 'win32') {
+      expect(() => normalizeRequestPath('\\\\sunucu\\pay', homedir())).toThrow(/Ağ yolları/);
+      expect(() => normalizeRequestPath('//sunucu/pay', homedir())).toThrow(/Ağ yolları/);
       expect(normalizeRequestPath('c:/Windows/../Users', homedir())).toBe('c:\\Users');
       expect(normalizeRequestPath('C:', homedir())).toBe('C:\\');
       expect(() => normalizeRequestPath('\\Users', homedir())).toThrow(/mutlak/);
@@ -162,8 +171,10 @@ describe('GET /api/fs/list', () => {
     expect(file.status).toBe(404);
     expect(((await file.json()) as ApiError).error).toContain('klasör değil');
 
-    const unc = await get(`?path=${encodeURIComponent('\\\\evil\\share')}`);
-    expect(unc.status).toBe(400);
+    if (process.platform === 'win32') {
+      const unc = await get(`?path=${encodeURIComponent('\\\\evil\\share')}`);
+      expect(unc.status).toBe(400);
+    }
   });
 
   it('güvenlik: yabancı Host ve başka siteden istek reddedilir', async () => {

@@ -2,6 +2,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { GitRefs } from '../../../../src/shared/types';
 import { Field } from '../../components/Field';
 import { FolderPathInput } from './folderPicker/FolderPathInput';
+import { SAMPLE_REPO_PATH } from '../../lib/platform';
 
 interface RepoPathFieldProps {
   id: string;
@@ -31,14 +32,14 @@ function refsStatus(q: UseQueryResult<GitRefs> | undefined): string | undefined 
 export function RepoPathField({ id, value, onChange, onCommit, onPicked, refsQuery, error, optional, hint }: RepoPathFieldProps) {
   const status = refsStatus(refsQuery);
   return (
-    <Field id={id} label="Repo yolu" error={error} optional={optional} hint={status ?? hint ?? 'Yerel git deposunun kök dizini.'}>
+    <Field id={id} label="Depo yolu" error={error} optional={optional} hint={status ?? hint ?? 'Yerel git deposunun kök dizini.'}>
       <FolderPathInput
         id={id}
         value={value}
         onChange={onChange}
         onCommit={onCommit}
         onPicked={onPicked}
-        placeholder="C:/projeler/shop"
+        placeholder={SAMPLE_REPO_PATH}
         invalid={!!error}
         describedBy={error ? `${id}-error` : `${id}-hint`}
       />

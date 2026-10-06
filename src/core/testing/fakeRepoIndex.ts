@@ -1,5 +1,5 @@
 /**
- * Açık haritalarla beslenen sahte RepoIndexApi. Birim testlerinde A1'in gerçek RepoIndex'ine bağımlı olmamak için.
+ * Açık haritalarla beslenen sahte RepoIndexApi. Birim testlerinde gerçek RepoIndex'e bağımlı olmamak için.
  * Verilmeyen sorgular boş sonuç döner.
  */
 import type { CallRef } from '../../shared/types.js';

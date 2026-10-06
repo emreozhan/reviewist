@@ -32,7 +32,7 @@ export function refTitle(index: ReviewIndex, r: SymbolRef): string {
   const list = r.targets.slice(0, 3).map((id) => targetLine(index, id)).join('\n');
   const more = r.targets.length > 3 ? `\n+${r.targets.length - 3} daha` : '';
   const conf = r.confidence && r.confidence !== 'exact' ? `\nEşleşme: ${CONFIDENCE_LABEL[r.confidence]}` : '';
-  return `${head}${list}${more}${conf}\nTık: sınıfını sekmede aç · Ctrl+tık: arka planda`;
+  return `${head}${list}${more}${conf}\n${INTENT_HINT}`;
 }
 
 export interface CodeRefs {
@@ -46,7 +46,7 @@ export interface CodeRefs {
   };
   /** Çok hedefli referans için seçim menüsü (çizilmeli). */
   menu: ReactNode;
-  /** Outline isteniyor (büyük review'da sunucu indeksi yeniden kurarken birkaç saniye sürebilir). */
+  /** Outline isteniyor (büyük incelemede sunucu indeksi yeniden kurarken birkaç saniye sürebilir). */
   loading: boolean;
 }
 

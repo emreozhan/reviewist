@@ -17,8 +17,10 @@
  */
 import type { CallRef, ChangeGroup, FileChange, MemberChange, RiskInfo, RiskLevel } from '../../shared/types.js';
 import type { TypeDiff } from '../java/model.js';
+import { TEST_STEM_PATTERN } from '../java/names.js';
 import { isBreakingSignature, isSemanticChange } from './risk.js';
 import { maxLevel, RISK_LEVEL_ORDER, simpleTypeName, symbolLabel } from './util.js';
+import { compareStrings } from '../compare.js';
 
 export const MAX_GROUP_SYMBOLS = 40;
 export const HUB_DEGREE = 15;
@@ -74,7 +76,7 @@ function compareRank(a: Sym, b: Sym): number {
   const ra = anchorRank(a);
   const rb = anchorRank(b);
   for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return rb[i] - ra[i];
-  return a.id.localeCompare(b.id);
+  return compareStrings(a.id, b.id);
 }
 
 /** Taşınan üyenin eski sahibi (tip id'si); taşıma değilse undefined. */
@@ -179,7 +181,7 @@ function splitComponent(symbols: Sym[]): { symbols: Sym[]; part?: string }[] {
       }
       // Tek tip sınırı aşıyorsa üyeleri (riske göre sıralı) dilimlenir.
       if (members.length > MAX_GROUP_SYMBOLS) {
-        const sorted = [...members].sort((x, y) => y.risk.score - x.risk.score || x.id.localeCompare(y.id));
+        const sorted = [...members].sort((x, y) => y.risk.score - x.risk.score || compareStrings(x.id, y.id));
         for (let i = 0; i < sorted.length; i += MAX_GROUP_SYMBOLS) chunks.push(sorted.slice(i, i + MAX_GROUP_SYMBOLS));
         continue;
       }
@@ -294,7 +296,7 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
   for (const s of syms.values()) if (!s.isTest && !prodByTypeName.has(s.td.change.name)) prodByTypeName.set(s.td.change.name, s);
   for (const list of testTypes.values()) {
     // Önce ad kalıbı (FooTest → Foo), yoksa çağırdığı en riskli üretim sembolü
-    const subject = /^(?:Test(?=[A-Z]))?(\w+?)(?:Test|Tests|IT|ITCase|IntegrationTest|Spec)?$/.exec(list[0].td.change.name)?.[1];
+    const subject = TEST_STEM_PATTERN.exec(list[0].td.change.name)?.[1];
     let best: Sym | undefined = subject ? prodByTypeName.get(subject) : undefined;
     for (const s of best ? [] : list) {
       for (const c of s.mc?.callees ?? []) {
@@ -318,7 +320,7 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
   for (const component of comps.values()) {
     for (const { symbols, part } of splitComponent(component)) {
       // Üretim sembolleri önce (riske göre), testler sonda.
-      symbols.sort((a, b) => Number(a.isTest) - Number(b.isTest) || b.risk.score - a.risk.score || a.id.localeCompare(b.id));
+      symbols.sort((a, b) => Number(a.isTest) - Number(b.isTest) || b.risk.score - a.risk.score || compareStrings(a.id, b.id));
       const level = maxLevel(symbols.map((s) => s.risk.level));
       if (symbols.length === 1 && RISK_LEVEL_ORDER[level] < RISK_LEVEL_ORDER.high) {
         small.push(symbols[0]);
@@ -338,11 +340,11 @@ export function buildGroups(typeDiffs: readonly TypeDiff[], files: readonly File
       });
     }
   }
-  groups.sort((a, b) => RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || b.score - a.score || b.symbolIds.length - a.symbolIds.length || a.title.localeCompare(b.title));
+  groups.sort((a, b) => RISK_LEVEL_ORDER[b.riskLevel] - RISK_LEVEL_ORDER[a.riskLevel] || b.score - a.score || b.symbolIds.length - a.symbolIds.length || compareStrings(a.title, b.title));
   const out: ChangeGroup[] = groups.map(({ score: _score, ...g }) => g);
 
   if (small.length) {
-    small.sort((a, b) => b.risk.score - a.risk.score || a.id.localeCompare(b.id));
+    small.sort((a, b) => b.risk.score - a.risk.score || compareStrings(a.id, b.id));
     const fileIds = [...new Set(small.map((s) => s.file))].sort();
     out.push({
       id: 'group:small',

@@ -3,9 +3,9 @@
  * ref listesi (getGitRefs). İçerik okuma kalıcı bir `git cat-file --batch` süreciyle (GitBlobReader) yapılır.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import type { ChangeSetFile, GitRefs } from '../shared/types.js';
 import {
   createLimiter,
@@ -13,8 +13,9 @@ import {
   filterByExt,
   gitStableKey,
   isBinaryContent,
+  isOsJunkFile,
   LruCache,
-  resolveInside,
+  readRepoFile,
   sanitizeRepoRelPath,
   worktreeStableKey,
   type ManagedChangeSet,
@@ -46,13 +47,66 @@ export interface GitResult {
   code: number;
 }
 
-/** Tüm git çağrılarına eklenen yapılandırma. `core.longpaths`: Windows'ta 260 karakteri aşan yollar (ör. guava). */
-const BASE_CONFIG = ['-c', 'core.quotepath=false', '-c', 'color.ui=false', '-c', 'core.longpaths=true'];
+/** Zaman aşımı verilmeyen git komutları için üst sınır: takılan bir süreç analiz kuyruğunu kalıcı kilitlemesin. */
+const DEFAULT_GIT_TIMEOUT_MS = 10 * 60_000;
+/** Tek bir git komutunun stdout sınırı; aşılırsa süreç durdurulur (Node 512 MB üstü metni tutamaz, bellek de dolar). */
+const MAX_GIT_OUTPUT_BYTES = 384 * 1024 * 1024;
+
+let emptyHooksDir: string | undefined;
+
+/**
+ * Bu sürece ait boş bir klasör: `core.hooksPath` buraya yönlendirilir. İncelenen depo güvenilmez olabilir
+ * (ör. içinde `.git` bulunan indirilmiş bir arşiv); depodaki hook'lar Reviewist'in git komutlarıyla çalışmamalı.
+ * Klasör mkdtemp ile (yalnız sahibine açık) oluşturulur, süreç çıkarken silinir.
+ */
+function hooksDir(): string {
+  if (emptyHooksDir === undefined) {
+    const dir = mkdtempSync(join(tmpdir(), 'reviewist-nohooks-'));
+    emptyHooksDir = dir;
+    process.once('exit', () => {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* geçici klasör; silinemezse işletim sistemi temizler */
+      }
+    });
+  }
+  return emptyHooksDir;
+}
+
+/**
+ * Tüm git çağrılarına eklenen yapılandırma (komut satırı, depo yapılandırmasını ezer):
+ *  - `core.quotepath=false`: yollar ham UTF-8; `core.longpaths`: Windows'ta 260 karakteri aşan yollar.
+ *  - `core.fsmonitor=false` ve boş `core.hooksPath`: depo yapılandırmasındaki fsmonitor komutu ya da hook'lar çalışmaz.
+ */
+function baseConfig(): string[] {
+  return [
+    '-c',
+    'core.quotepath=false',
+    '-c',
+    'color.ui=false',
+    '-c',
+    'core.longpaths=true',
+    '-c',
+    'core.fsmonitor=false',
+    '-c',
+    `core.hooksPath=${hooksDir()}`,
+  ];
+}
+
+/**
+ * Tüm git süreçlerinin ortamı.
+ *  - `LC_ALL=C`: hata iletileri İngilizce gelsin (classifyGitError desenleri buna göre; gettext'li git, ör. Homebrew,
+ *    yerel dile çevirir). Dosya adları etkilenmez (core.quotepath=false ham bayt verir).
+ *  - `GIT_OPTIONAL_LOCKS=0`: salt okunur komutlar indeksi fırsatçı biçimde yeniden yazmaz (kullanıcının deposuna
+ *    dokunulmaz, indeks yazımına bağlı hook tetiklenmez).
+ */
+const GIT_ENV: Record<string, string> = { GIT_TERMINAL_PROMPT: '0', LC_ALL: 'C', GIT_OPTIONAL_LOCKS: '0' };
 
 function gitArgs(args: string[], config?: Record<string, string>): string[] {
   const extra: string[] = [];
   for (const [k, v] of Object.entries(config ?? {})) extra.push('-c', `${k}=${v}`);
-  return [...BASE_CONFIG, ...extra, ...args];
+  return [...baseConfig(), ...extra, ...args];
 }
 
 function trimDetail(s: string, max = 400): string {
@@ -63,6 +117,13 @@ function trimDetail(s: string, max = 400): string {
 /** stderr'i Türkçe, yönlendirici bir SourceError'a çevirir. */
 function classifyGitError(repoPath: string, args: string[], stderr: string, code: number): SourceError {
   const detail = trimDetail(stderr) || `çıkış kodu ${code}`;
+  // macOS: /usr/bin/git bir Xcode yönlendiricisidir; Command Line Tools yoksa ya da sistem güncellemesinden sonra bozulur.
+  if (/xcrun: error|xcode-select|Xcode license|no developer tools were found/i.test(stderr)) {
+    return new SourceError(
+      'Git çalıştırılamadı: Xcode Command Line Tools kurulu değil ya da güncellenmeli. Terminalde `xcode-select --install` çalıştırın (ya da Homebrew ile git kurun).',
+      { status: 500, code: 'GIT_NOT_FOUND', detail },
+    );
+  }
   if (/not a git repository/i.test(stderr)) {
     return new SourceError(`Klasör bir git deposu değil: ${repoPath}`, {
       status: 400,
@@ -106,13 +167,14 @@ function assertDirectory(repoPath: string): void {
 /** git'i çalıştırır; çıkış kodu ne olursa olsun sonucu döner (yalnız süreç başlatılamazsa fırlatır). */
 export async function runGitResult(repoPath: string, args: string[], opts: RunGitOptions = {}): Promise<GitResult> {
   assertDirectory(repoPath);
+  const git = gitCommand();
   return await new Promise<GitResult>((resolvePromise, reject) => {
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawn(resolveGitBinary().command, gitArgs(args, opts.config), {
+      child = spawn(git, gitArgs(args, opts.config), {
         cwd: repoPath,
         windowsHide: true,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(opts.env ?? {}) },
+        env: { ...process.env, ...GIT_ENV, ...(opts.env ?? {}) },
       });
     } catch (err) {
       reject(gitSpawnError(err));
@@ -120,25 +182,45 @@ export async function runGitResult(repoPath: string, args: string[], opts: RunGi
     }
     const out: Buffer[] = [];
     const errOut: Buffer[] = [];
+    let outBytes = 0;
+    let tooLarge = false;
     let timedOut = false;
-    const timer =
-      opts.timeoutMs !== undefined
-        ? setTimeout(() => {
-            timedOut = true;
-            child.kill();
-          }, opts.timeoutMs)
-        : undefined;
-    child.stdout.on('data', (c: Buffer) => out.push(c));
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, timeoutMs);
+    timer.unref();
+    child.stdout.on('data', (c: Buffer) => {
+      if (tooLarge) return;
+      outBytes += c.length;
+      if (outBytes > MAX_GIT_OUTPUT_BYTES) {
+        tooLarge = true;
+        out.length = 0;
+        child.kill();
+        return;
+      }
+      out.push(c);
+    });
     child.stderr.on('data', (c: Buffer) => errOut.push(c));
     child.on('error', (err) => {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
       reject(gitSpawnError(err));
     });
     child.on('close', (code) => {
-      if (timer) clearTimeout(timer);
+      clearTimeout(timer);
+      if (tooLarge) {
+        reject(
+          new SourceError(
+            `Git çıktısı çok büyük (${Math.round(MAX_GIT_OUTPUT_BYTES / 1024 / 1024)} MB üstü): git ${args[0] ?? ''}. Daha dar bir aralık seçin.`,
+            { status: 413, code: 'GIT_FAILED' },
+          ),
+        );
+        return;
+      }
       if (timedOut) {
         reject(
-          new SourceError(`Git komutu zaman aşımına uğradı: git ${args[0] ?? ''}`, {
+          new SourceError(`Git komutu ${Math.round(timeoutMs / 1000)} sn içinde bitmedi ve durduruldu: git ${args[0] ?? ''}`, {
             status: 504,
             code: 'GIT_FAILED',
           }),
@@ -159,15 +241,31 @@ export async function runGitResult(repoPath: string, args: string[], opts: RunGi
   });
 }
 
+/**
+ * Çalıştırılacak git'in mutlak yolu. Bulunamadıysa süreç hiç başlatılmaz: çıplak `git` Windows'ta çalışma dizininden
+ * (incelenen depodan) çözülebilir, macOS'ta Xcode yönlendiricisini boş yere tetikler.
+ */
+function gitCommand(): string {
+  const git = resolveGitBinary();
+  if (git.source === 'none') throw gitNotFoundError();
+  return git.command;
+}
+
+function gitNotFoundError(): SourceError {
+  const info = resolveGitBinary();
+  const install =
+    process.platform === 'darwin'
+      ? 'Kurmak için terminalde `xcode-select --install` çalıştırın (ya da Homebrew: `brew install git`).'
+      : 'Git kurulu olmalı.';
+  return new SourceError(
+    `Git bulunamadı. ${install} Kuruluysa ama sunucu PATH'i eksik bir ortamdan başlatıldıysa git'in tam yolunu REVIEWIST_GIT ortam değişkeniyle verin.`,
+    { status: 500, code: 'GIT_NOT_FOUND', detail: `Denenen: ${info.tried.join(', ')}` },
+  );
+}
+
 function gitSpawnError(err: unknown): SourceError {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
-  if (code === 'ENOENT') {
-    const info = resolveGitBinary();
-    return new SourceError(
-      "Git bulunamadı. Git kurulu olmalı; sunucu PATH'i eksik bir ortamdan başlatıldıysa git.exe yolunu REVIEWIST_GIT ortam değişkeniyle verin.",
-      { status: 500, code: 'GIT_NOT_FOUND', detail: `Denenen: ${info.tried.join(', ')}` },
-    );
-  }
+  if (code === 'ENOENT') return gitNotFoundError();
   return new SourceError('Git süreci başlatılamadı.', {
     status: 500,
     code: 'GIT_FAILED',
@@ -325,6 +423,11 @@ export class GitBlobReader {
     return await p;
   }
 
+  /** Metin önbelleğini boşaltır (analiz bittikten sonra bellek geri verilsin; sonraki okumalar git'ten gelir). */
+  clearCache(): void {
+    this.cache.clear();
+  }
+
   /**
    * Süreci kapatır; bekleyen istekler reddedilir. Dönen Promise süreç çıktığında çözülür
    * (çağıranın beklemesi gerekmez; ör. Windows'ta dizini hemen silmek isteyen testler bekler).
@@ -355,10 +458,10 @@ export class GitBlobReader {
 
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.proc) return this.proc;
-    const proc = spawn(resolveGitBinary().command, gitArgs(['cat-file', '--batch']), {
+    const proc = spawn(gitCommand(), gitArgs(['cat-file', '--batch']), {
       cwd: this.repoPath,
       windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      env: { ...process.env, ...GIT_ENV },
     });
     this.proc = proc;
     this.leftover = Buffer.alloc(0);
@@ -623,8 +726,21 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
   const sideOf = createSideResolver(files);
   let headTree: Promise<GitTree> | undefined;
   let baseTree: Promise<GitTree> | undefined;
-  const treeOf = (side: 'old' | 'new'): Promise<GitTree> =>
-    side === 'old' ? (baseTree ??= loadGitTree(top, baseSha)) : (headTree ??= loadGitTree(top, headSha));
+  // Başarısız yükleme önbellekte kalmaz: sonraki çağrı yeniden dener.
+  const treeOf = (side: 'old' | 'new'): Promise<GitTree> => {
+    if (side === 'old') {
+      baseTree ??= loadGitTree(top, baseSha).catch((err: unknown) => {
+        baseTree = undefined;
+        throw err;
+      });
+      return baseTree;
+    }
+    headTree ??= loadGitTree(top, headSha).catch((err: unknown) => {
+      headTree = undefined;
+      throw err;
+    });
+    return headTree;
+  };
 
   return {
     info: {
@@ -657,6 +773,9 @@ export async function createGitChangeSet(opts: GitChangeSetOptions): Promise<Man
       const t = sideOf(side, path);
       if (t.path === undefined || t.binary) return undefined;
       return (await treeOf(side)).blobs.get(t.path);
+    },
+    compact() {
+      reader.clearCache();
     },
     dispose() {
       return reader.close();
@@ -694,7 +813,7 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
   if (opts.includeUntracked ?? true) {
     const untracked = splitNul(await runGit(top, ['ls-files', '-z', '--others', '--exclude-standard']));
     const known = new Set(files.map((f) => f.path));
-    let list = untracked.filter((p) => !known.has(p));
+    let list = untracked.filter((p) => !known.has(p) && !isOsJunkFile(p));
     if (list.length > 0) progress(`İzlenmeyen dosyalar okunuyor: ${list.length}`);
     if (list.length > MAX_UNTRACKED) {
       warnings.push(`${list.length} izlenmeyen dosya var; yalnızca ilk ${MAX_UNTRACKED} tanesi dahil edildi.`);
@@ -704,14 +823,9 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
     const added = await Promise.all(
       list.map((p) =>
         limit(async (): Promise<ChangeSetFile | undefined> => {
-          const abs = resolveInside(top, p);
-          if (!abs) return undefined;
-          let buf: Buffer;
-          try {
-            buf = await readFile(abs);
-          } catch {
-            return undefined; // okunamayan (ör. silinmiş, dizin bağlantısı) dosya atlanır
-          }
+          // Sembolik bağlar izlenmez (git gibi hedef yol metni okunur); okunamayan dosya atlanır.
+          const buf = await readRepoFile(top, p);
+          if (!buf) return undefined;
           if (isBinaryContent(buf, p) || buf.length > MAX_UNTRACKED_BYTES) {
             return { path: p, status: 'added', binary: true, additions: 0, deletions: 0, hunks: [] };
           }
@@ -727,13 +841,18 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
   const sideOf = createSideResolver(files);
   let allowed: Promise<Set<string>> | undefined;
   const loadAllowed = (): Promise<Set<string>> => {
-    allowed ??= runGit(top, ['ls-files', '-z', '-co', '--exclude-standard']).then((out) => {
-      const set = new Set(splitNul(out));
-      for (const f of files) if (f.status !== 'deleted') set.add(f.path);
-      for (const f of files) if (f.status === 'deleted') set.delete(f.path);
-      for (const f of files) if (f.status === 'renamed' && f.oldPath !== undefined) set.delete(f.oldPath);
-      return set;
-    });
+    allowed ??= runGit(top, ['ls-files', '-z', '-co', '--exclude-standard'])
+      .then((out) => {
+        const set = new Set(splitNul(out));
+        for (const f of files) if (f.status !== 'deleted') set.add(f.path);
+        for (const f of files) if (f.status === 'deleted') set.delete(f.path);
+        for (const f of files) if (f.status === 'renamed' && f.oldPath !== undefined) set.delete(f.oldPath);
+        return set;
+      })
+      .catch((err: unknown) => {
+        allowed = undefined; // başarısız yükleme önbellekte kalmaz
+        throw err;
+      });
     return allowed;
   };
   const toGitText = createWorktreeCleaner(top, reader, loadAllowed);
@@ -764,17 +883,16 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
       // Yalnızca izlenen/izlenmeyen-ama-yoksayılmayan dosyalar diskten okunur (.env gibi yoksayılanlar asla).
       const set = await loadAllowed();
       if (!set.has(t.path)) return undefined;
-      const abs = resolveInside(top, t.path);
-      if (!abs) return undefined;
+      const buf = await readRepoFile(top, t.path);
+      if (!buf || isBinaryContent(buf, t.path)) return undefined;
       try {
-        const buf = await readFile(abs);
-        return isBinaryContent(buf, t.path) ? undefined : await toGitText(t.path, buf);
+        return await toGitText(t.path, buf);
       } catch {
         return undefined;
       }
     },
     async listFiles(_side, ext) {
-      return filterByExt([...(await loadAllowed())].sort(), ext);
+      return filterByExt([...(await loadAllowed())].filter((p) => !isOsJunkFile(p)).sort(), ext);
     },
     async blobId(side, rawPath) {
       // Yeni taraf diskten okunur: kararlı kimliği yok (hash-object maliyeti yerine undefined).
@@ -783,8 +901,14 @@ export async function createWorktreeChangeSet(opts: WorktreeChangeSetOptions): P
       if (path === undefined) return undefined;
       const t = sideOf('old', path);
       if (t.path === undefined || t.binary) return undefined;
-      baseTree ??= loadGitTree(top, baseSha);
+      baseTree ??= loadGitTree(top, baseSha).catch((err: unknown) => {
+        baseTree = undefined;
+        throw err;
+      });
       return (await baseTree).blobs.get(t.path);
+    },
+    compact() {
+      reader.clearCache();
     },
     dispose() {
       return reader.close();

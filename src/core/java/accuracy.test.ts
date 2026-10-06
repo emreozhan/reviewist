@@ -1,5 +1,7 @@
 /**
- * Tur 3 (QA turu 1 bulguları): B1(d), B3, B4, B6, B7, B8, B9, B10, B13, anonim sınıflar, targetsOfCallSite/typesByFqn.
+ * Java katmanı doğruluk testleri: statik import / iç sınıf bağlama, çok kaynak kökü, varargs anotasyon maskesi, taşıma eşiği,
+ * git yeniden adlandırması, overload seçimi, tip değişkeni normalizasyonu, null denetimi, tip referansları, anonim sınıflar,
+ * test yolu ve üye id çakışması.
  */
 import { describe, expect, it } from 'vitest';
 import { parseJavaFile } from './extract.js';
@@ -21,7 +23,7 @@ function member(m: JavaFileModel, id: string): JavaMember {
 const callersOf = (idx: RepoIndex, id: string): string[] =>
   idx.callersOf(id).map((c) => `${c.fromId}@${c.line}:${c.confidence}`);
 
-describe('B4: varargs tip anotasyonu maskeleme', () => {
+describe('varargs tip anotasyonu maskeleme', () => {
   it('Object @Nullable ... args hatasız ayrışır; parametre ve sonraki metotlar kaybolmaz', async () => {
     const src = [
       'package x;',
@@ -74,7 +76,7 @@ describe('B4: varargs tip anotasyonu maskeleme', () => {
   });
 });
 
-describe('B10: null denetimi sayımı', () => {
+describe('null denetimi sayımı', () => {
   it('Objects.hashCode/equals/toString/requireNonNullElse(Get)/isNull/nonNull ve Optional.ofNullable sayılır', async () => {
     const m = await parseJavaFile(
       'A.java',
@@ -101,7 +103,7 @@ class A {
   });
 });
 
-describe('B9: tip değişkeni adı normalizasyonu', () => {
+describe('tip değişkeni adı normalizasyonu', () => {
   it('<T> T foo(T) ↔ <E> E foo(E): imza değişikliği değil, kozmetik "tip parametresi adı değişti"', async () => {
     const o = await parseJavaFile('A.java', 'class A {\n  <T> T foo(T x) { T y = x; return y; }\n  <T> T bar(T x) { return null; }\n}\n');
     const n = await parseJavaFile('A.java', 'class A {\n  <E> E foo(E x) { E y = x; return y; }\n  <E> E bar(E x, int k) { return null; }\n}\n');
@@ -135,7 +137,7 @@ describe('B9: tip değişkeni adı normalizasyonu', () => {
   });
 });
 
-describe('B6: önemsiz gövdeler ve test↔üretim taşımaları', () => {
+describe('önemsiz gövdeler ve test↔üretim taşımaları', () => {
   async function moves(oldFiles: Record<string, string>, newFiles: Record<string, string>): Promise<TypeDiff[]> {
     const diffs: TypeDiff[] = [];
     const paths = new Set([...Object.keys(oldFiles), ...Object.keys(newFiles)]);
@@ -174,7 +176,8 @@ describe('B6: önemsiz gövdeler ve test↔üretim taşımaları', () => {
     );
     expect(statuses(diffs)).toEqual(['a.A#nil():removed', 'a.B#total(int):moved', 'a.T#nil():added']);
     expect(isTestPath('src/test/java/a/T.java')).toBe(true);
-    expect(isTestPath('core/src/main/java/a/FooTests.java')).toBe(true);
+    expect(isTestPath('core/src/a/FooTests.java')).toBe(true);
+    expect(isTestPath('core/src/main/java/a/FooTests.java')).toBe(false);
     expect(isTestPath('src/main/java/a/Contest.java')).toBe(false);
   });
 
@@ -188,7 +191,7 @@ describe('B6: önemsiz gövdeler ve test↔üretim taşımaları', () => {
   });
 });
 
-describe('B7: git yeniden adlandırması (fileRenamed)', () => {
+describe('git yeniden adlandırması (fileRenamed)', () => {
   it('tek üst düzey tip eşik ne olursa olsun eşlenir; iç tipler göreli adla', async () => {
     const o = await parseJavaFile(
       'a/BitMapProducer.java',
@@ -214,7 +217,7 @@ describe('B7: git yeniden adlandırması (fileRenamed)', () => {
   });
 });
 
-describe('B8: argüman tipleriyle overload seçimi', () => {
+describe('argüman tipleriyle overload seçimi', () => {
   const FILES = {
     'src/main/java/lang/StringUtils.java': `package lang;
 import java.util.Iterator;
@@ -269,7 +272,7 @@ public class Use {
   });
 });
 
-describe('B1(d): iç sınıf aynı metodu tanımlıyor / statik import', () => {
+describe('iç sınıf aynı metodu tanımlıyor / statik import', () => {
   const FILES = {
     'src/c/ImmutableMap.java': `package c;
 public abstract class ImmutableMap<K, V> {
@@ -306,7 +309,7 @@ public final class Predicates {
   });
 });
 
-describe('B3: aynı FQN birden çok kaynak kökünde', () => {
+describe('aynı FQN birden çok kaynak kökünde', () => {
   const FILES = {
     'guava/src/com/g/base/Pre.java': 'package com.g.base;\npublic final class Pre {\n  public static void check(boolean b) {}\n  public static void onlyMain() {}\n}\n',
     'android/guava/src/com/g/base/Pre.java': 'package com.g.base;\npublic final class Pre {\n  public static void check(boolean b) {}\n  public static void onlyAndroid() {}\n}\n',
@@ -352,7 +355,7 @@ describe('B3: aynı FQN birden çok kaynak kökünde', () => {
   });
 });
 
-describe('B13: filesReferencingType ek referans biçimleri', () => {
+describe('filesReferencingType ek referans biçimleri', () => {
   it('alan erişimi niteleyicisi, statik çağrı alıcısı, anotasyon argümanı, X.class, generic ve cast', async () => {
     const { idx } = await build({
       'src/t/TimeZones.java': 'package t;\npublic class TimeZones {\n  public static final String GMT_ID = "GMT";\n  public static final Object GMT = null;\n  public static Object get() { return null; }\n}\n',
@@ -407,5 +410,31 @@ class Bus {
       'class A {\n  Runnable r = new Runnable() {\n    void go() {}\n    public void run() { go(); go(); }\n    int n = 1;\n  };\n}\n',
     );
     expect(diffJavaFile(o, n2)[0]?.members[0]?.change.status).toBe('modified');
+  });
+});
+
+describe('üye id çakışması', () => {
+  it('aynı basit adlı farklı parametre tipleri ayrı id alır; çakışma yoksa biçim değişmez', async () => {
+    const { idx, models } = await build({
+      'p/A.java': `package p;
+import java.util.Date;
+public class A {
+  String fmt(Date d) { return ""; }
+  String fmt(java.sql.Date d) { return ""; }
+  void b(One.Builder x) {}
+  void b(Two.Builder x) {}
+  void plain(Date d) {}
+}
+`,
+    });
+    const ids = (models[0] as JavaFileModel).types[0]?.members.map((m) => m.id);
+    expect(ids).toEqual(['p.A#fmt(Date)', 'p.A#fmt(java.sql.Date)', 'p.A#b(One.Builder)', 'p.A#b(Two.Builder)', 'p.A#plain(Date)']);
+    expect(idx.getMember('p.A#fmt(java.sql.Date)')?.member.params[0]?.type).toBe('java.sql.Date');
+    expect(idx.getMember('p.A#fmt(Date)')?.member.params[0]?.type).toBe('Date');
+  });
+
+  it('nitelik de aynıysa kaynak sırasıyla ~2 soneki', async () => {
+    const m = await parseJavaFile('p/B.java', 'package p;\nclass B {\n  void x(int a) {}\n  void x(int b) {}\n}\n');
+    expect(m.types[0]?.members.map((x) => x.id)).toEqual(['p.B#x(int)', 'p.B#x(int)~2']);
   });
 });

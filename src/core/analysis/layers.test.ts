@@ -59,12 +59,31 @@ describe('yardımcılar', () => {
   });
   it('test yolu', () => {
     expect(isTestPath('src/test/java/A.java')).toBe(true);
-    expect(isTestPath('src/main/java/TestData.java')).toBe(true);
+    // Üretim kökü altında ad kalıbı uygulanmaz
+    expect(isTestPath('src/main/java/TestData.java')).toBe(false);
+    expect(isTestPath('src/main/java/com/acme/OrderSpec.java')).toBe(false);
+    expect(isTestPath('src/main/java/com/acme/LoadTester.java')).toBe(false);
+    expect(isTestPath('src/main/java/com/acme/AUDIT.java')).toBe(false);
+    expect(isTestPath('src/main/java/it/acme/Order.java')).toBe(false);
+    expect(isTestPath('foo-tests/src/main/java/a/Helper.java')).toBe(true);
+    // Üretim kökü dışında ad kalıpları (daraltılmış)
+    expect(isTestPath('test/a/TestData.java')).toBe(true);
+    expect(isTestPath('lib/a/OrderIT.java')).toBe(true);
+    expect(isTestPath('lib/a/AUDIT.java')).toBe(false);
+    expect(isTestPath('lib/a/LoadTester.java')).toBe(true);
+    expect(isTestPath('lib/a/SPEC.java')).toBe(false);
+    expect(isTestPath('lib/a/İşlemTest.java')).toBe(true);
+    expect(isTestPath('src/it/java/a/X.java')).toBe(true);
     expect(isTestPath('src/main/java/Testing.java')).toBe(false);
     expect(isTestPath('src/main/java/Contest.java')).toBe(false);
   });
   it('hexagonal repo', () => {
-    expect(isHexagonalRepo(['src/main/java/com/acme/adapter/in/web/A.java'])).toBe(true);
+    expect(isHexagonalRepo(['src/main/java/com/acme/adapter/in/web/A.java', 'src/main/java/com/acme/application/port/in/P.java'])).toBe(true);
+    expect(isHexagonalRepo(['src/main/java/com/acme/adapter/out/A.java', 'src/main/java/com/acme/domain/D.java', 'src/main/java/com/acme/application/S.java'])).toBe(true);
+    // tek işaret ya da Java dışı klasör yetmez
+    expect(isHexagonalRepo(['src/main/java/com/acme/adapter/in/web/A.java'])).toBe(false);
+    expect(isHexagonalRepo(['src/main/java/com/acme/web/A.java', 'frontend/src/adapters/x.ts', 'frontend/src/ports/y.ts'])).toBe(false);
+    expect(isHexagonalRepo(['src/main/java/com/acme/domain/D.java', 'src/main/java/com/acme/application/S.java'])).toBe(false);
     expect(isHexagonalRepo(['src/main/java/com/acme/service/A.java'])).toBe(false);
   });
   it('modül çözücü', () => {

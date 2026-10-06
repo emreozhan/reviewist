@@ -21,8 +21,9 @@ export function NavFilters({ mode }: { mode: NavMode }) {
   const tick = useUi((s) => s.searchFocusTick);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Odak isteği tek seferlik: çalışma alanına sonraki dönüşlerde (yeniden bağlanma) kutu tekrar odaklanmaz.
   useEffect(() => {
-    if (tick > 0) inputRef.current?.focus();
+    if (useUi.getState().consumeSearchFocus()) inputRef.current?.focus();
   }, [tick]);
 
   return (

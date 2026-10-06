@@ -1,5 +1,5 @@
 /**
- * Tur 3 (QA tur 1) uçtan uca testleri: gerçek ayrıştırıcı + RepoIndex ile bellek içi ChangeSet'ler.
+ * Doğruluk uçtan uca testleri: gerçek ayrıştırıcı + RepoIndex ile bellek içi ChangeSet'ler.
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +13,7 @@ import { modelInconsistencies } from './testing/modelConsistency.js';
 const member = (model: ReviewModel, id: string) => model.types.flatMap((t) => t.members).find((m) => m.id === id);
 const staleFindings = (model: ReviewModel) => model.findings.filter((f) => f.id.startsWith('callers:removed-with-callers:'));
 
-describe('B1 — bayat çağrı yanlış pozitifleri', () => {
+describe('bayat çağrı yanlış pozitifleri', () => {
   it('iç sınıfın aynı adlı metoduna giden çağrı ve örtük varsayılan yapıcı bayat sayılmaz; gerçek kırık çağrı error', async () => {
     const MAP = (withCreate: boolean) => `package p;
 
@@ -72,7 +72,7 @@ public class User {
   });
 });
 
-describe('B2 — kalan overload argüman tipiyle uyuşmuyor', () => {
+describe('kalan overload argüman tipiyle uyuşmuyor', () => {
   it('indexOf(CharSequence,int,int) → 4 parametre; char argümanlı eski çağrı likely bayat (warning)', async () => {
     const U = (four: boolean) => `package p;
 
@@ -103,7 +103,7 @@ public class StringUtils {
   });
 });
 
-describe('B3 — çift FQN (çok kaynak köklü repo)', () => {
+describe('çift FQN (çok kaynak köklü repo)', () => {
   it('her kökün tipi ayrı id alır; modeldeki tüm referanslar tutarlı', async () => {
     const P = (body: string) => `package com.g.base;
 
@@ -144,7 +144,7 @@ public class User {
   });
 });
 
-describe('B5 — javax → jakarta', () => {
+describe('javax → jakarta', () => {
   it('import hedefi değişen dosya kozmetik değil, ayrıntı ve orta risk taşır', async () => {
     const OWNER = (ns: string) => `package app.model;
 
@@ -182,7 +182,7 @@ public class Owner {
   });
 });
 
-describe('B7 — git yeniden adlandırması', () => {
+describe('git yeniden adlandırması', () => {
   it('renamed dosyada tek üst düzey tip removed+added değil renamed olur', async () => {
     const OLD = `package p;
 

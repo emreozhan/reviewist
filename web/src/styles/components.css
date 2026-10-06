@@ -321,6 +321,13 @@
   color: var(--st-cosmetic);
 }
 
+/* Görüldü işaretlendikten sonra değişikliği farklılaşan dosya. */
+.tag--stale {
+  border-color: var(--st-modified);
+  color: var(--st-modified);
+  white-space: nowrap;
+}
+
 /* ---- Durum glifi: renk + şekil ---- */
 .status {
   --st: var(--st-unchanged);

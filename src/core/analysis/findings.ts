@@ -3,8 +3,9 @@
  * Bulgu id'leri kararlıdır: `${kategori}:${kod}:${sembol|dosya}`.
  */
 import type { CallRef, FileChange, Finding, FindingCategory, MemberChange, ReviewSummary, RiskReason, TypeChange } from '../../shared/types.js';
-import { isApiVisible, isBreakingSignature, isSemanticChange } from './risk.js';
+import { isApiVisible, isBreakingSignature, isRemovalStatus, isSemanticChange, PARSE_UNVERIFIABLE_CODES } from './risk.js';
 import { basename, RISK_LEVEL_ORDER, symbolLabel } from './util.js';
+import { compareStrings } from '../compare.js';
 
 type Severity = Finding['severity'];
 
@@ -77,6 +78,19 @@ export interface MemberFindingInput {
   outsideCallers: number;
   /** Bu üye, diff'te imzası/sözleşmesi değişen bir üst tip metodunu override ediyor (sonuç değişikliği). */
   followsChangedContract?: boolean;
+  /**
+   * Alan/enum sabiti/record bileşeni için head'de kullanım araması yapıldı mı: 'tracked' (ad araması yapıldı) ya da
+   * 'untracked' (örnek alanı: başka dosyalardaki erişimler izlenemez). Metot/yapıcıda verilmez.
+   */
+  fieldUsage?: 'tracked' | 'untracked';
+  /** Dosya ayrıştırma hatası içeriyor: silinme kaynaklı bulgular "doğrulanamadı" bilgisine iner. */
+  parseUncertain?: boolean;
+}
+
+/** Ayrıştırma hatalı dosyada silinme kaynaklı bulguyu bilgi düzeyine indirir. */
+function unverified(f: Finding, code: string, status: string, parseUncertain: boolean | undefined): Finding {
+  if (!parseUncertain || !isRemovalStatus(status) || !PARSE_UNVERIFIABLE_CODES.has(code)) return f;
+  return { ...f, severity: 'info', title: `Doğrulanamadı (dosya tam ayrıştırılamadı): ${f.title}` };
 }
 
 const API_CODES = new Set(['public-api-signature', 'public-api-removed', 'public-api-renamed']);
@@ -110,8 +124,15 @@ export function memberFindings(input: MemberFindingInput): Finding[] {
       if (mc.status === 'added') severity = 'info';
     }
     if (r.code === 'public-api-removed' && input.outsideCallers === 0) {
-      severity = 'info';
-      message = `${r.message}. Repoda çağıranı kalmadı; harici kullanıcılar (başka modül/servis) varsa kırılır.`;
+      if (input.fieldUsage === 'untracked') {
+        message = `${r.message}. Alan kullanımları otomatik izlenmiyor; elle doğrulayın.`;
+      } else if (input.fieldUsage === 'tracked') {
+        severity = 'info';
+        message = `${r.message}. Repoda kullanımı bulunamadı (ad araması); harici kullanıcılar (başka modül/servis) varsa kırılır.`;
+      } else {
+        severity = 'info';
+        message = `${r.message}. Repoda çağıranı kalmadı; harici kullanıcılar (başka modül/servis) varsa kırılır.`;
+      }
     }
     if (r.code === 'removed-with-callers') {
       const calls = input.staleCalls.filter((c) => c.confidence !== 'name-only');
@@ -119,31 +140,31 @@ export function memberFindings(input: MemberFindingInput): Finding[] {
       // Yalnız 'exact' çağrı yeri kesin kırılmadır (error); yalnız 'likely' ise uyarı.
       if (!calls.some((c) => c.confidence === 'exact')) {
         severity = 'warning';
-        title = `Silinmiş/değişmiş, hâlâ çağrılıyor olabilir: ${label}`;
+        title = input.fieldUsage ? `Silindi ama hâlâ kullanılıyor olabilir: ${label}` : `Silinmiş/değişmiş, hâlâ çağrılıyor olabilir: ${label}`;
+      } else if (input.fieldUsage) {
+        title = `Silindi ama hâlâ kullanılıyor: ${label}`;
       }
       const sites = calls.slice(0, 5).map((c) => `${c.file}:${c.line}${c.inChangedCode ? ' (bu diff içinde)' : ''}`);
-      message = `${r.message}. Çağrı yerleri: ${sites.join(', ')}${calls.length > 5 ? ' ...' : ''}`;
+      message = `${r.message}. ${input.fieldUsage ? 'Kullanım' : 'Çağrı'} yerleri: ${sites.join(', ')}${calls.length > 5 ? ' ...' : ''}`;
       symbolIds = [mc.id, ...new Set(calls.map((c) => c.fromId))];
     }
     if ((r.code === 'public-api-signature' || r.code === 'public-api-removed' || r.code === 'public-api-renamed') && input.outsideCallers > 0) {
       message = `${r.message}. Diff dışında ${input.outsideCallers} çağıranı var.`;
     }
     if (r.code === 'callers-outside-diff' && RISK_LEVEL_ORDER[mc.risk.level] >= RISK_LEVEL_ORDER.high) severity = 'warning';
-    out.push({
-      id: `${rule.category}:${r.code}:${mc.id}`,
-      severity,
-      category: rule.category,
-      title,
-      message,
-      file: file.path,
-      line,
-      symbolIds,
-    });
+    out.push(
+      unverified(
+        { id: `${rule.category}:${r.code}:${mc.id}`, severity, category: rule.category, title, message, file: file.path, line, symbolIds },
+        r.code,
+        mc.status,
+        input.parseUncertain,
+      ),
+    );
   }
   return out;
 }
 
-export function typeFindings(tc: TypeChange, file: FileChange): Finding[] {
+export function typeFindings(tc: TypeChange, file: FileChange, parseUncertain?: boolean): Finding[] {
   const out: Finding[] = [];
   for (const r of tc.risk.reasons) {
     // Tip riski üyelerin nedenlerini de içerir; yalnızca tip düzeyi kodlar ve 'Tip anotasyonu' nedenleri burada.
@@ -155,7 +176,7 @@ export function typeFindings(tc: TypeChange, file: FileChange): Finding[] {
     if (file.isTest && !rule.inTests) continue;
     const referenced = tc.risk.reasons.some((x) => x.code === 'removed-with-callers' && x.message.startsWith('Tip'));
     const safeDelete = (r.code === 'type-removed' || r.code === 'type-renamed') && !referenced;
-    out.push({
+    const f: Finding = {
       id: `${rule.category}:${r.code}:${tc.id}`,
       severity: safeDelete ? 'info' : rule.severity,
       category: rule.category,
@@ -164,7 +185,8 @@ export function typeFindings(tc: TypeChange, file: FileChange): Finding[] {
       file: file.path,
       line: tc.newRange?.startLine ?? tc.oldRange?.startLine,
       symbolIds: [tc.id],
-    });
+    };
+    out.push(unverified(f, r.code, tc.status, parseUncertain));
   }
   return out;
 }
@@ -176,7 +198,7 @@ export function typeFindings(tc: TypeChange, file: FileChange): Finding[] {
 export function unverifiedStaleFinding(counts: ReadonlyMap<string, number>): Finding[] {
   if (counts.size === 0) return [];
   const total = [...counts.values()].reduce((s, n) => s + n, 0);
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || compareStrings(a[0], b[0]));
   return [
     {
       id: 'callers:unverified-stale',
@@ -226,10 +248,15 @@ export function sortFindings(findings: readonly Finding[]): Finding[] {
     (a, b) =>
       SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
       CATEGORY_ORDER[a.category] - CATEGORY_ORDER[b.category] ||
-      (a.file ?? '').localeCompare(b.file ?? '') ||
+      compareStrings(a.file ?? '', b.file ?? '') ||
       (a.line ?? 0) - (b.line ?? 0) ||
-      a.id.localeCompare(b.id),
+      compareStrings(a.id, b.id),
   );
+}
+
+/** Record bileşeni (statik olmayan alan) public API sayılır: erişimci + kanonik yapıcı parametresi. */
+function apiVisibility(m: MemberChange, t: TypeChange): MemberChange['visibility'] {
+  return t.kind === 'record' && m.kind === 'field' && !/(?:^|\s)static\s/.test(m.signature) ? 'public' : m.visibility;
 }
 
 export function computeSummary(files: readonly FileChange[], types: readonly TypeChange[], impactedOutsideDiff: number, untestedChanges: number): ReviewSummary {
@@ -237,7 +264,7 @@ export function computeSummary(files: readonly FileChange[], types: readonly Typ
   const semanticMembers = memberList.filter(({ m }) => isSemanticChange(m.status));
   const apiStatuses = new Set(['removed', 'renamed', 'moved']);
   const publicApiChanges =
-    semanticMembers.filter(({ m, t }) => (apiStatuses.has(m.status) || isBreakingSignature(m)) && isApiVisible(m.visibility, t.visibility, t.kind)).length +
+    semanticMembers.filter(({ m, t }) => (apiStatuses.has(m.status) || isBreakingSignature(m)) && isApiVisible(apiVisibility(m, t), t.visibility, t.kind)).length +
     types.filter((t) => apiStatuses.has(t.status) && (t.visibility === 'public' || t.visibility === 'protected')).length;
   const nonJavaHigh = files.filter((f) => f.typeIds.length === 0 && RISK_LEVEL_ORDER[f.risk.level] >= RISK_LEVEL_ORDER.high).length;
   const typeOnlyHigh = types.filter((t) => isSemanticChange(t.status) && !t.members.some((m) => isSemanticChange(m.status)) && RISK_LEVEL_ORDER[t.risk.level] >= RISK_LEVEL_ORDER.high).length;

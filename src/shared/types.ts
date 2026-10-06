@@ -1,7 +1,7 @@
 /**
- * Reviewist ortak sözleşmesi.
- * Sunucu (core + sources + server) ile web arayüzü bu tipler üzerinden konuşur.
- * Bu dosyayı değiştirmek tüm şeritleri etkiler; değişiklik gerekiyorsa orkestratöre bildir.
+ * Reviewist ortak veri modeli ve HTTP API sözleşmesi.
+ * Sunucu (core + sources + server) ile web arayüzü yalnızca bu tipler üzerinden konuşur; buradaki bir değişiklik
+ * her iki tarafı da etkiler (bkz. docs/ARCHITECTURE.md).
  */
 
 // ---------------------------------------------------------------------------
@@ -64,7 +64,7 @@ export interface ChangeSet {
    */
   listFiles(side: 'new', ext?: string): Promise<string[]>;
   /**
-   * (Tur 3, opsiyonel) İçeriğin kararlı kimliği (git blob SHA). Varsa core ayrıştırma sonucunu bununla önbellekler.
+   * (opsiyonel) İçeriğin kararlı kimliği (git blob SHA). Varsa core ayrıştırma sonucunu bununla önbellekler.
    * Çalışma ağacındaki diske ait dosyalar için undefined.
    */
   blobId?(side: 'old' | 'new', path: string): Promise<string | undefined>;
@@ -328,6 +328,8 @@ export interface ReviewListItem {
   createdAt: string;
   kind: ReviewSourceInfo['kind'];
   files: number;
+  /** Kaynağın kararlı anahtarı; arayüz inceleme silinince o kaynağa ait yerel kayıtları bununla temizler. */
+  stableKey?: string;
 }
 
 export interface GitRefs {
@@ -335,7 +337,7 @@ export interface GitRefs {
   currentBranch?: string;
   defaultBase?: string; // main/master/develop tahmini
   branches: string[];
-  /** (Tur 5) Yerel dallar, en son commit tarihine göre yeniden eskiye; head önerisi için. */
+  /** Yerel dallar, en son commit tarihine göre yeniden eskiye; head önerisi için. */
   recentBranches?: string[];
   remoteBranches: string[];
   tags: string[];
@@ -368,7 +370,7 @@ export interface ReviewJob {
 }
 
 // ---------------------------------------------------------------------------
-// Kod gezinme (Tur 4): koddaki tıklanabilir referanslar ve sembol konumları
+// Kod gezinme: koddaki tıklanabilir referanslar ve sembol konumları
 // ---------------------------------------------------------------------------
 
 /** Bir dosyadaki sembol bildirimi (tip, metot, yapıcı, alan, enum sabiti). */
@@ -423,7 +425,7 @@ export interface SymbolLocation {
 }
 
 // ---------------------------------------------------------------------------
-// Klasör seçici (Tur 5): yerel repo yolunu seçmek için sunucu tarafı dizin listesi
+// Klasör seçici: yerel depo yolunu seçmek için sunucu tarafı dizin listesi
 // ---------------------------------------------------------------------------
 
 export interface FsEntry {

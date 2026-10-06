@@ -337,7 +337,7 @@ public class Tax {
 });
 
 // ---------------------------------------------------------------------------
-// Fikstür (Şerit D): fixtures/sample-repo, main...feature/ai-refactor
+// Fikstür: fixtures/sample-repo, main...feature/ai-refactor
 // ---------------------------------------------------------------------------
 
 const FIXTURE = join(process.cwd(), 'fixtures', 'sample-repo');

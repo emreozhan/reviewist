@@ -1,7 +1,7 @@
 /**
  * Repo geneli Java sembol indeksi: tip çözümleme, kalıtım, override ilişkileri ve çağrı grafiği.
  *
- * Çok kaynak köklü repolar (B3): aynı FQN birden çok dosyada bildirilebilir (guava `guava/src` + `android/guava/src`).
+ * Çok kaynak köklü repolar: aynı FQN birden çok dosyada bildirilebilir (guava `guava/src` + `android/guava/src`).
  * Tüm adaylar tutulur (`typesByFqn`). Çözümleme (tip, üst tip, alan, çağrı bağlama) çağıranın kaynak köküyle aynı
  * kökteki adayı tercih eder; yoksa varsayılan aday kullanılır.
  * Varsayılan aday (getType / getFileOfType / getMember / superTypesOf bağlamsız çağrıldığında): kaynak kökü en az
@@ -13,11 +13,17 @@ import type { CallSite, JavaFileModel, JavaMember, JavaParam, JavaType, RepoInde
 import {
   baseTypeName,
   eraseTypeForId,
+  ID_PART_CHARS,
+  IDENT,
+  IDENT_EXACT_RE,
   normalizeVarargs,
   referencedSimpleNames,
   simpleName,
   sourceRootOf,
+  splitArraySuffix,
+  stripTypeArgsRaw,
   typeParamNames,
+  UPPER_START_RE,
 } from './names.js';
 import { type Compat, inferArgType, typeCompat } from './typeInference.js';
 
@@ -167,13 +173,17 @@ function scanBalanced(text: string, i: number): { end: number; commas: number; e
 }
 
 /** Alıcı metnini zincire böler: 'a.b(x, y).c()' -> a, b/2, c/0. Desteklenmeyen sözdiziminde undefined. */
+const NEW_HEAD_RE = new RegExp(`^new\\s+([${ID_PART_CHARS}.]+)\\s*(?:<[^(]*>)?\\s*(?=\\()`, 'u');
+const CAST_HEAD_RE = new RegExp(`^\\(\\s*\\(\\s*([${ID_PART_CHARS}.]+)\\s*(?:<[^()]*>)?\\s*\\)`, 'u');
+const LEADING_IDENT_RE = new RegExp(`^${IDENT}`, 'u');
+
 function parseChain(text: string): { head?: string; segs: ChainSeg[] } | undefined {
   let pos = 0;
   let head: string | undefined;
   const skipWs = (): void => {
     while (pos < text.length && /\s/.test(text[pos] as string)) pos++;
   };
-  const newM = /^new\s+([\w$.]+)\s*(?:<[^(]*>)?\s*(?=\()/.exec(text);
+  const newM = NEW_HEAD_RE.exec(text);
   if (newM?.[1]) {
     const b = scanBalanced(text, newM[0].length);
     if (!b) return undefined;
@@ -182,7 +192,7 @@ function parseChain(text: string): { head?: string; segs: ChainSeg[] } | undefin
   } else if (text[0] === '(') {
     const b = scanBalanced(text, 0);
     if (!b) return undefined;
-    const cast = /^\(\s*\(\s*([\w$.]+)\s*(?:<.*>)?\s*\)/.exec(text.slice(0, b.end + 1));
+    const cast = CAST_HEAD_RE.exec(text.slice(0, b.end + 1));
     if (!cast?.[1]) return undefined;
     head = cast[1];
     pos = b.end + 1;
@@ -205,7 +215,7 @@ function parseChain(text: string): { head?: string; segs: ChainSeg[] } | undefin
       pos++;
       skipWs();
     }
-    const id = /^[A-Za-z_$][\w$]*/.exec(text.slice(pos));
+    const id = LEADING_IDENT_RE.exec(text.slice(pos));
     if (!id) return undefined;
     pos += id[0].length;
     skipWs();
@@ -245,7 +255,7 @@ export class RepoIndex implements RepoIndexApi {
   private readonly calleesMap = new Map<string, Set<string>>();
   private readonly sitesByName = new Map<string, SiteRec[]>();
   private readonly siteTargets = new Map<string, Set<string>>();
-  /** (Tur 4) siteTargets anahtarı → bağlama güveni (birden çok bağlamada en zayıfı). */
+  /** siteTargets anahtarı → bağlama güveni (birden çok bağlamada en zayıfı). */
   private readonly siteConfidence = new Map<string, Confidence>();
   private readonly filesBySimpleRef = new Map<string, Set<string>>();
   private readonly filesByImport = new Map<string, Set<string>>();
@@ -392,7 +402,7 @@ export class RepoIndex implements RepoIndexApi {
         if (!text) return;
         for (const n of referencedSimpleNames(text)) names.add(n);
       };
-      // B13: dosyadaki tüm büyük harfli tanımlayıcılar (alan erişimi niteleyicisi, anotasyon argümanı, X.class, cast...)
+      // Dosyadaki tüm büyük harfli tanımlayıcılar (alan erişimi niteleyicisi, anotasyon argümanı, X.class, cast...)
       for (const n of file.typeRefs ?? []) names.add(n);
       for (const t of file.types) {
         add(t.superclass);
@@ -410,7 +420,7 @@ export class RepoIndex implements RepoIndexApi {
             if (s.isConstructor) add(s.name);
             else if (s.receiver && (s.receiverKind === 'identifier' || s.receiverKind === 'field-access')) {
               const first = s.receiver.split('.')[0] ?? '';
-              if (/^[A-Z]/.test(first)) add(s.receiver);
+              if (UPPER_START_RE.test(first)) add(s.receiver);
             }
           }
         }
@@ -681,7 +691,7 @@ export class RepoIndex implements RepoIndexApi {
   }
 
   /**
-   * Alt tiplerde (geçişli) override edenler + (Tur 3) anonim sınıflardaki implementasyonlar:
+   * Alt tiplerde (geçişli) override edenler + anonim sınıflardaki implementasyonlar:
    * sentetik id `${kapsayan üye id}$anon${n}#${ad}(${parametreler})` (getMember ile çözülmez).
    */
   overriddenBy(memberId: string): string[] {
@@ -790,7 +800,7 @@ export class RepoIndex implements RepoIndexApi {
 
   private declaredToExpr(declared: string, file: JavaFileModel, type: JavaType, member?: JavaMember): ExprType {
     if (this.isTypeVar(declared, type, member)) return { kind: 'unknown' };
-    if (/(\[\]|\.\.\.)\s*$/.test(declared.replace(/<.*>/g, ''))) return { kind: 'external', raw: declared }; // dizi
+    if (splitArraySuffix(stripTypeArgsRaw(declared).trimEnd()).suffix !== '') return { kind: 'external', raw: declared }; // dizi
     const fqn = this.resolveTypeName(declared, file, type);
     return fqn ? { kind: 'type', fqn } : { kind: 'external', raw: baseTypeName(declared) };
   }
@@ -798,7 +808,7 @@ export class RepoIndex implements RepoIndexApi {
   /** Alıcı ifade metninin (a, a.b, this.x, Outer.Inner, pkg.Type) tipini çözer. */
   private resolveExpr(text: string, member: JavaMember, type: JavaType, file: JavaFileModel): ExprType {
     const segs = text.split('.').map((s) => s.trim());
-    if (segs.some((s) => !/^[A-Za-z_$][\w$]*$/.test(s))) return { kind: 'unknown' };
+    if (segs.some((s) => !IDENT_EXACT_RE.test(s))) return { kind: 'unknown' };
     let cur: ExprType;
     let i: number;
     if (segs[0] === 'this') {
@@ -828,7 +838,7 @@ export class RepoIndex implements RepoIndexApi {
             }
           }
           if (i === 0) {
-            const upper = segs.findIndex((s) => /^[A-Z]/.test(s));
+            const upper = segs.findIndex((s) => UPPER_START_RE.test(s));
             if (upper >= 0) {
               // repo dışı tip adı (Collections, java.util.Objects ...)
               return { kind: 'external', raw: segs.slice(0, upper + 1).join('.') };
@@ -999,7 +1009,7 @@ export class RepoIndex implements RepoIndexApi {
     this.bind(rec, cands.map((m) => m.id), cands.length === 1 ? 'exact' : 'likely');
   }
 
-  // ----- B8: argüman tipleriyle overload seçimi -----
+  // ----- Argüman tipleriyle overload seçimi -----
 
   /** Argüman tipleri (çıkarılamayanlar undefined); bilgi yoksa undefined. */
   private argTypesOf(rec: SiteRec): (string | undefined)[] | undefined {
@@ -1043,7 +1053,7 @@ export class RepoIndex implements RepoIndexApi {
       const p1 = normalizeVarargs(eraseTypeForId((m1.params[i] as JavaParam).type));
       const p2 = normalizeVarargs(eraseTypeForId((m2.params[i] as JavaParam).type));
       if (p1 === p2) continue;
-      if (tv1.has(p1.replace(/(\[\])+$/, ''))) return false;
+      if (tv1.has(splitArraySuffix(p1).base)) return false;
       const c = typeCompat(this, p1, o1 ? { file: o1.file, type: o1.type } : {}, p2, o2 ? { file: o2.file, type: o2.type } : {}, tv2);
       if (c !== 'ok') return false;
     }
@@ -1294,7 +1304,7 @@ export class RepoIndex implements RepoIndexApi {
       file.packageName === ownerPkg ||
       file.imports.some((i) => (!i.wildcard && i.name === ownerFqn) || (i.wildcard && i.name === ownerPkg));
     /**
-     * B1(d): alıcısız/this çağrısı, çağıranın kendi tipinde ya da dış tipinde bildirilmiş aynı adlı bir üyeye
+     * Alıcısız/this çağrısı, çağıranın kendi tipinde ya da dış tipinde bildirilmiş aynı adlı bir üyeye
      * bağlandıysa (ör. iç sınıf aynı metodu tanımlıyor) sahibin üyesine gitmez. Argüman tipi çelişkisi varsa atlanmaz.
      */
     const boundElsewhere = (rec: SiteRec): boolean => {
@@ -1328,7 +1338,7 @@ export class RepoIndex implements RepoIndexApi {
             (i) => i.static && (i.name === `${ownerFqn}.${name}` || (i.wildcard && i.name === ownerFqn)),
           );
           if (s.receiverKind === 'none' && !rec.targets?.length && !staticImport) {
-            // B1(d): sınıf kapsamında bulunamayan ad, başka bir tipten statik import edilmişse oraya gider
+            // Sınıf kapsamında bulunamayan ad, başka bir tipten statik import edilmişse oraya gider
             const single = rec.file.imports.some((i) => i.static && !i.wildcard && simpleName(i.name) === name);
             if (single) break;
             const wild = rec.file.imports.filter((i) => i.static && i.wildcard && i.name !== ownerFqn);

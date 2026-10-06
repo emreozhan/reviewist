@@ -61,8 +61,8 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
         text: `${c.verified} çağıran${c.outside > 0 ? ` (${c.outside} diff dışı)` : ''}${c.likely > 0 ? ` · ${c.likely} olası` : ''}`,
         outside: c.outside > 0,
         title: c.likely > 0
-          ? `Bu sembolü çağıran yerler. ${c.likely} tanesi "olası": alıcı tipi kesin çözülemedi, overload/arity ile eşlendi. Tıklayın: listeden seçip gözatın.`
-          : 'Bu sembolü çağıran yerler (alıcı tipi çözüldü). Tıklayın: listeden seçip gözatın.',
+          ? `Bu sembolü çağıran yerler. ${c.likely} tanesi "olası": alıcı tipi kesin çözülemedi, overload/arity ile eşlendi. Tıklayın: listeden seçip pencerede açın.`
+          : 'Bu sembolü çağıran yerler (alıcı tipi çözüldü). Tıklayın: listeden seçip pencerede açın.',
         tone: c.likely > 0 ? 'likely' : undefined,
         menuTitle: 'Çağıranlar',
         targets: member.callers.map((cr, i) => ({ cr, i })).filter(({ cr }) => cr.confidence !== 'name-only').map(({ cr, i }) => callTarget(cr, i)),
@@ -86,7 +86,7 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
         glyph: '⇣',
         text: `${member.overriddenBy.length} alt sınıfta override`,
         outside: false,
-        title: 'Alt tiplerde bu metodu override edenler. Tıklayın: listeden seçip gözatın.',
+        title: 'Alt tiplerde bu metodu override edenler. Tıklayın: listeden seçip pencerede açın.',
         menuTitle: 'Override edenler',
         targets: member.overriddenBy.map((id, i) => symbolTarget(index, id, `o${i}`)),
       });
@@ -109,7 +109,7 @@ export function PropagationBadges({ member, type }: PropagationBadgesProps) {
       glyph: '⇣',
       text: `${type.subTypes.length} alt tip`,
       outside: false,
-      title: 'Doğrudan alt tipler / implementasyonlar. Tıklayın: listeden seçip gözatın.',
+      title: 'Doğrudan alt tipler / implementasyonlar. Tıklayın: listeden seçip pencerede açın.',
       menuTitle: 'Alt tipler',
       targets: type.subTypes.map((id, i) => symbolTarget(index, id, `s${i}`)),
     });

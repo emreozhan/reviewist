@@ -3,17 +3,22 @@
  * base/head, --worktree ya da --pr verilirse sunucu açıldıktan sonra ilk review iş (job) altyapısıyla hazırlanır,
  * ilerleme konsola yazılır; tarayıcı review hazır olunca açılır.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serve } from '@hono/node-server';
-import open from 'open';
 import type { ApiError, ReviewJob, ReviewRequest } from '../shared/types.js';
 import { isSourceError, shortMessage } from '../sources/errors.js';
 import { getGitRefs, resolveRepoRoot } from '../sources/git.js';
 import { DEFAULT_TOKEN_ENVS } from '../sources/github.js';
 import { createApp } from './app.js';
 import { CliUsageError, HELP_TEXT, parseCliArgs, type CliOptions } from './cliOptions.js';
+import { openBrowser } from './openBrowser.js';
+
+// Windows: alt süreç başlatılırken çalışma dizini (incelenen depo olabilir) çalıştırılabilir dosya aramasına katılmasın.
+// Komutlar zaten mutlak yolla çağrılır; bu ek bir güvencedir.
+process.env.NoDefaultCurrentDirectoryInExePath = '1';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -36,11 +41,34 @@ function readVersion(): string {
   return '0.0.0';
 }
 
-/** Derlenmiş halde `dist/server/server/cli.js` → `dist/web`. Geliştirme (tsx) modunda yok sayılır. */
+/**
+ * Önceki çalıştırmalardan kalmış geçici klasörleri (ör. terminal kapatılınca silinemeyen GitHub arşivleri) temizler.
+ * Yalnız Reviewist'in kendi önekleri ve bir günden eski olanlar; hata sessizce yok sayılır.
+ */
+function sweepStaleTempDirs(): void {
+  const maxAgeMs = 24 * 60 * 60 * 1000;
+  const prefixes = ['reviewist-gh-', 'reviewist-nohooks-', 'reviewist-smoke-'];
+  try {
+    const base = tmpdir();
+    for (const name of readdirSync(base)) {
+      if (!prefixes.some((p) => name.startsWith(p))) continue;
+      const full = join(base, name);
+      try {
+        if (Date.now() - statSync(full).mtimeMs > maxAgeMs) rmSync(full, { recursive: true, force: true });
+      } catch {
+        /* başka bir süreç kullanıyor olabilir */
+      }
+    }
+  } catch {
+    /* tmpdir okunamadı */
+  }
+}
+
+/** Paketlenmiş halde `dist/server/cli.js` → `dist/web`. Geliştirme (tsx) modunda arayüzü Vite sunar; yok sayılır. */
 function findStaticDir(): string | undefined {
-  const candidate = resolve(here, '../../web');
-  if (basename(dirname(candidate)) === 'dist' && existsSync(join(candidate, 'index.html'))) return candidate;
-  return undefined;
+  if (/\.ts$/.test(fileURLToPath(import.meta.url))) return undefined;
+  const candidate = resolve(here, '../web');
+  return existsSync(join(candidate, 'index.html')) ? candidate : undefined;
 }
 
 function formatApiError(e: ApiError): string {
@@ -83,6 +111,7 @@ async function main(): Promise<void> {
   }
 
   const version = readVersion();
+  sweepStaleTempDirs();
   const repoArg = resolve(opts.repoPath ?? process.cwd());
   let repoRoot: string | undefined;
   try {
@@ -174,7 +203,7 @@ async function main(): Promise<void> {
   if (!staticDir) {
     console.log('Yalnızca API modu (derlenmiş arayüz yok). Arayüz için `npm run dev:web` çalıştırın (http://localhost:5173).');
   } else if (opts.open) {
-    open(url).catch((err: unknown) => console.warn(`Tarayıcı açılamadı: ${shortMessage(err, 120)}`));
+    openBrowser(url).catch((err: unknown) => console.warn(`Tarayıcı açılamadı (${shortMessage(err, 120)}). Adresi elle açın: ${url}`));
   }
   console.log('Durdurmak için Ctrl+C.');
 }

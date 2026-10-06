@@ -2,13 +2,21 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@ta
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import '@fontsource/ibm-plex-sans/400.css';
-import '@fontsource/ibm-plex-sans/500.css';
-import '@fontsource/ibm-plex-sans/600.css';
-import '@fontsource/ibm-plex-mono/400.css';
-import '@fontsource/ibm-plex-mono/400-italic.css';
-import '@fontsource/ibm-plex-mono/500.css';
-import '@fontsource/ibm-plex-mono/600.css';
+// Yalnızca Latin + Latin Extended alt kümeleri (Türkçe dahil) pakete girer; diğer alfabeler sistem yazı tipine düşer.
+import '@fontsource/ibm-plex-sans/latin-400.css';
+import '@fontsource/ibm-plex-sans/latin-ext-400.css';
+import '@fontsource/ibm-plex-sans/latin-500.css';
+import '@fontsource/ibm-plex-sans/latin-ext-500.css';
+import '@fontsource/ibm-plex-sans/latin-600.css';
+import '@fontsource/ibm-plex-sans/latin-ext-600.css';
+import '@fontsource/ibm-plex-mono/latin-400.css';
+import '@fontsource/ibm-plex-mono/latin-ext-400.css';
+import '@fontsource/ibm-plex-mono/latin-400-italic.css';
+import '@fontsource/ibm-plex-mono/latin-ext-400-italic.css';
+import '@fontsource/ibm-plex-mono/latin-500.css';
+import '@fontsource/ibm-plex-mono/latin-ext-500.css';
+import '@fontsource/ibm-plex-mono/latin-600.css';
+import '@fontsource/ibm-plex-mono/latin-ext-600.css';
 import '@fontsource-variable/martian-mono/index.css';
 import '@fontsource-variable/fraunces/index.css';
 import '@xyflow/react/dist/style.css';
@@ -29,6 +37,7 @@ import './styles/tabs.css';
 import './styles/peek.css';
 
 import { App } from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { isApiError } from './lib/api';
 import { useApiMode } from './state/apiMode';
 import { applyTheme, useTheme } from './state/theme';
@@ -56,7 +65,9 @@ if (!root) throw new Error('#root bulunamadı');
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </QueryClientProvider>
   </StrictMode>,
 );

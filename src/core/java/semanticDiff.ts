@@ -6,6 +6,8 @@ import type { ChangeFlag, ChangeStatus, MemberChange, RiskInfo, TypeChange } fro
 import type { JavaFileModel, JavaMember, JavaType, MemberDiff, TypeDiff } from './model.js';
 import {
   eraseTypeForId,
+  ID_PART_CHARS,
+  IDENT,
   isTestPath,
   normalizeVarargs,
   renameTypeVars,
@@ -18,7 +20,7 @@ export interface DiffFileOptions {
   oldPath?: string;
   newPath?: string;
   /**
-   * (Tur 3, B7) Dosya git'te yeniden adlandırıldı/taşındı (R%). true ise ve her iki tarafta tek üst düzey tip varsa
+   * Dosya git'te yeniden adlandırıldı/taşındı (R%). true ise ve her iki tarafta tek üst düzey tip varsa
    * tipler benzerlik eşiğinden bağımsız eşlenir (`renamed`/`moved`); iç tipleri de dış tipe göre göreli adla eşlenir.
    */
   fileRenamed?: boolean;
@@ -27,7 +29,7 @@ export interface DiffFileOptions {
 const RENAME_THRESHOLD = 0.85;
 const TYPE_MATCH_THRESHOLD = 0.6;
 const TRIVIAL_TOKENS = 4;
-/** B6: farklı ad / tipler arası eşleşmede gövde en az bu kadar token olmalı (ya da imza şekli aynı olmalı). */
+/** Farklı ad / tipler arası eşleşmede gövde en az bu kadar token olmalı (ya da imza şekli aynı olmalı). */
 const MIN_MOVE_TOKENS = 15;
 const VISIBILITY_MODS = new Set(['public', 'protected', 'private']);
 
@@ -47,8 +49,9 @@ interface Bag {
 
 const bagCache = new WeakMap<JavaMember, Bag>();
 
-const NORM_TOKEN_RE = /"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+/g;
-const RAW_TOKEN_RE = /"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[A-Za-z_$][\w$]*|\d[\w.]*|\S/g;
+// Literal kapanış tırnakları isteğe bağlı: kapanmayan (hatalı) literal tek token olur; her tırnaktan yeniden tarama yok.
+export const NORM_TOKEN_RE = /"""[\s\S]*?"""|"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|\S+/g;
+export const RAW_TOKEN_RE = new RegExp(`"""[\\s\\S]*?"""|"(?:\\\\.|[^"\\\\])*"?|'(?:\\\\.|[^'\\\\])*'?|${IDENT}|\\d[\\w.]*|\\S`, 'gu');
 
 /** normalizedBody'nin token dizisi: normalizedText'in sonekinden (boşluklar korunmuş tokenlar) çıkarılır. */
 function bodyTokens(m: JavaMember): string[] {
@@ -151,7 +154,7 @@ function sameShape(a: JavaMember, b: JavaMember): boolean {
 }
 
 /**
- * B6: farklı ad veya farklı tip arasında eşleşme için gövde yeterince ayırt edici mi:
+ * Farklı ad veya farklı tip arasında eşleşme için gövde yeterince ayırt edici mi:
  * her iki gövde en az MIN_MOVE_TOKENS token ya da imza şekli (parametre + dönüş tipi) aynı.
  */
 function significantPair(a: JavaMember, b: JavaMember): boolean {
@@ -232,7 +235,7 @@ function lineDelta(oldText: string, newText: string): { added: number; removed: 
 // Üye karşılaştırma
 // ---------------------------------------------------------------------------
 
-/** B9: sınıf tip değişkenleri (dış tipler dahil, dıştan içe) iki tarafta. */
+/** Sınıf tip değişkenleri (dış tipler dahil, dıştan içe) iki tarafta. */
 interface TvCtx {
   oldVars: string[];
   newVars: string[];
@@ -263,7 +266,7 @@ function tvNormFor(o: JavaMember, n: JavaMember, tv: TvCtx | undefined): TvNorm 
 }
 
 interface Comparison {
-  /** B9: yalnız tip değişkeni adları farklı (normalize edilince eşit) bir alan var. */
+  /** Yalnız tip değişkeni adları farklı (normalize edilince eşit) bir alan var. */
   tvRenamed: boolean;
   sigFlags: ChangeFlag[];
   flags: ChangeFlag[];
@@ -274,8 +277,10 @@ interface Comparison {
   javadocChanged: boolean;
 }
 
+const ANNOTATION_NAME_RE = new RegExp(`^@\\s*([${ID_PART_CHARS}.]+)`, 'u');
+
 function annotationName(a: string): string {
-  const m = /^@\s*([\w$.]+)/.exec(a);
+  const m = ANNOTATION_NAME_RE.exec(a);
   return m ? `@${m[1] as string}` : a;
 }
 
@@ -926,7 +931,7 @@ export function diffJavaFile(
       matchedOld.add(o);
     }
   }
-  // B7: git yeniden adlandırması + iki tarafta tek üst düzey tip: eşik aranmadan eşle; iç tipleri göreli adla eşle.
+  // Git yeniden adlandırması + iki tarafta tek üst düzey tip: eşik aranmadan eşle; iç tipleri göreli adla eşle.
   if (opts.fileRenamed) {
     const oldTop = oldTypes.filter((t) => !t.outerFqn);
     const newTop = newTypes.filter((t) => !t.outerFqn);
@@ -1039,7 +1044,7 @@ export function detectCrossFileMoves(diffs: TypeDiff[]): void {
       const br = bagOf(r.member);
       for (const a of pool) {
         if (ownerOf(a) === ownerOf(r) || a.td === r.td) continue;
-        if (isTest(a) !== isTest(r)) continue; // B6: test kökü <-> üretim kökü taşıması sayılmaz
+        if (isTest(a) !== isTest(r)) continue; // Test kökü <-> üretim kökü taşıması sayılmaz
         if (upperBound(br, bagOf(a.member)) < RENAME_THRESHOLD) continue;
         if (!significantPair(r.member, a.member)) continue;
         const s = memberSimilarity(r.member, a.member);

@@ -9,6 +9,7 @@ import type {
   ReviewStep,
   TypeChange,
 } from '../../../src/shared/types';
+import { fileFingerprint } from './fingerprint';
 import { memberName, parseSymbolId, simpleTypeName } from './symbolId';
 
 export interface PlanEntry {
@@ -53,6 +54,8 @@ export interface ReviewIndex {
   /** Riske, sonra sembol sayısına göre sıralı gruplar. */
   groupsByRisk: ChangeGroup[];
   findingCounts: { total: SeverityCounts; byCategory: Map<FindingCategory, SeverityCounts> };
+  /** Dosya id → değişiklik parmak izi ("görüldü" işaretinin bayatlığını anlamak için; bir kez hesaplanır). */
+  fingerprintByFile: Map<string, string>;
 }
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -178,6 +181,7 @@ export function buildIndex(review: ReviewModel): ReviewIndex {
     sourceRoots: buildSourceRoots(review.types),
     groupsByRisk,
     findingCounts: { total, byCategory },
+    fingerprintByFile: new Map(review.files.map((f) => [f.id, fileFingerprint(f)])),
   };
 }
 

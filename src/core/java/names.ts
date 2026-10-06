@@ -1,11 +1,52 @@
 /**
- * Java tip adı yardımcıları (metin tabanlı): generic silme, annotation temizleme, id için parametre tipi normalizasyonu.
+ * Java tip adı yardımcıları (metin tabanlı): generic silme, annotation temizleme, id için parametre tipi normalizasyonu,
+ * Unicode tanımlayıcı desenleri ve test yolu tespiti.
  */
+
+// ---------------------------------------------------------------------------
+// Tanımlayıcı desenleri (Unicode; `u` bayrağıyla kullanılır)
+// ---------------------------------------------------------------------------
+
+/** Java tanımlayıcısının ilk karakteri: harf (`Ş`, `ö` dahil), harf sayılan sayı, `_`, `$`. Karakter sınıfı içeriği. */
+export const ID_START_CHARS = '\\p{L}\\p{Nl}_$';
+/** Java tanımlayıcısının devam karakterleri: başlangıç karakterleri + rakam, birleşik işaretler, bağlayıcı noktalama. */
+export const ID_PART_CHARS = '\\p{L}\\p{Nl}\\p{Nd}\\p{Mn}\\p{Mc}\\p{Pc}_$';
+/** Tek tanımlayıcı deseni (kaynak metni): `Sipariş`, `şube2`, `$x`. */
+export const IDENT = `[${ID_START_CHARS}][${ID_PART_CHARS}]*`;
+/** Tanımlayıcı karakteri öncesi/sonrası sınırları (ASCII `\b` yerine). */
+export const IDENT_BEFORE = `(?<![${ID_PART_CHARS}])`;
+export const IDENT_AFTER = `(?![${ID_PART_CHARS}])`;
+
+/** Tam eşleşen tek tanımlayıcı. */
+export const IDENT_EXACT_RE = new RegExp(`^${IDENT}$`, 'u');
+/** Tanımlayıcı başlangıç karakteri mi (tek karakter). */
+export const ID_START_RE = new RegExp(`^[${ID_START_CHARS}]$`, 'u');
+/** Tanımlayıcı devam karakteri mi (tek karakter). */
+export const ID_PART_RE = new RegExp(`^[${ID_PART_CHARS}]$`, 'u');
+/** Büyük harfle başlıyor mu (`Şube`, `Order`). */
+export const UPPER_START_RE = /^\p{Lu}/u;
+/** Küçük harf içeriyor mu (TAMAMI_BÜYÜK sabitleri ayırmak için). */
+export const HAS_LOWER_RE = /\p{Ll}/u;
+
+/** Düzenli ifade özel karakterlerini kaçışlar. */
+export function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** `word` tanımlayıcısının tam kelime olarak geçtiği yerleri bulan desen (Unicode sınırlı). */
+export function identWordRegExp(word: string, flags = ''): RegExp {
+  return new RegExp(`${IDENT_BEFORE}${escapeRegExp(word)}${IDENT_AFTER}`, `u${flags.replace('u', '')}`);
+}
 
 /** Ardışık boşlukları tek boşluğa indirir ve uçları kırpar. */
 export function collapseWs(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
+
+const ANNOTATION_HEAD_RE = new RegExp(`^@\\s*[${ID_PART_CHARS}]+(?:\\s*\\.\\s*[${ID_PART_CHARS}]+)*\\s*`, 'u');
+
+/** Test sınıfı adından konu adı: `TestŞube` / `ŞubeTest` / `ŞubeIT` → `Şube` (1. grup). */
+export const TEST_STEM_PATTERN = new RegExp(`^(?:Test(?=\\p{Lu}))?([${ID_PART_CHARS}]+?)(?:Test|Tests|IT|ITCase|IntegrationTest|Spec)?$`, 'u');
 
 /** Tip metnindeki `@Ann` / `@Ann(...)` (type-use) annotation'larını atar. */
 export function stripAnnotations(text: string): string {
@@ -15,7 +56,7 @@ export function stripAnnotations(text: string): string {
   while (i < text.length) {
     const ch = text[i];
     if (ch === '@' && !text.startsWith('@interface', i)) {
-      const m = /^@\s*[\w$]+(?:\s*\.\s*[\w$]+)*\s*/.exec(text.slice(i));
+      const m = ANNOTATION_HEAD_RE.exec(text.slice(i));
       i += m ? m[0].length : 1;
       if (text[i] === '(') {
         let depth = 0;
@@ -59,12 +100,21 @@ export function stripTypeArgs(text: string): string {
   return stripTypeArgsRaw(stripAnnotations(text)).replace(/\s+/g, '');
 }
 
-/** Dizi/varargs soneki ayrılmış hali: { base: 'java.util.List', suffix: '[]' } */
-function splitSuffix(clean: string): { base: string; suffix: string } {
-  const m = /((?:\[\])|(?:\.\.\.))*$/.exec(clean);
-  const suffix = m ? m[0] : '';
-  return { base: clean.slice(0, clean.length - suffix.length), suffix };
+/**
+ * Dizi/varargs soneki ayrılmış hali: { base: 'java.util.List', suffix: '[]' }. Sondan geriye doğrusal tarama
+ * (`(\[\]|\.\.\.)*$` deseni uzun girdide ikinci dereceden geri izleme yapar).
+ */
+export function splitArraySuffix(clean: string): { base: string; suffix: string } {
+  let end = clean.length;
+  for (;;) {
+    if (end >= 2 && clean[end - 1] === ']' && clean[end - 2] === '[') end -= 2;
+    else if (end >= 3 && clean.startsWith('...', end - 3)) end -= 3;
+    else break;
+  }
+  return { base: clean.slice(0, end), suffix: clean.slice(end) };
 }
+
+const splitSuffix = splitArraySuffix;
 
 /** Basit ad: son nokta sonrası. */
 export function simpleName(qualified: string): string {
@@ -91,6 +141,9 @@ export function normalizeVarargs(erased: string): string {
   return erased.endsWith('...') ? `${erased.slice(0, -3)}[]` : erased;
 }
 
+const FIRST_IDENT_RE = new RegExp(`(${IDENT})`, 'u');
+const QUALIFIED_IDENT_RE = new RegExp(`${IDENT}(?:\\s*\\.\\s*${IDENT})*`, 'gu');
+
 /** '<T extends Foo<T>, U>' -> ['T', 'U'] */
 export function typeParamNames(typeParams: string | undefined): string[] {
   if (!typeParams) return [];
@@ -109,7 +162,7 @@ export function typeParamNames(typeParams: string | undefined): string[] {
   if (cur.trim()) parts.push(cur);
   const names: string[] = [];
   for (const p of parts) {
-    const m = /([A-Za-z_$][\w$]*)/.exec(stripAnnotations(p));
+    const m = FIRST_IDENT_RE.exec(stripAnnotations(p));
     if (m?.[1]) names.push(m[1]);
   }
   return names;
@@ -118,12 +171,11 @@ export function typeParamNames(typeParams: string | undefined): string[] {
 /** Tip metninde geçen tüm (büyük harfle başlayan) basit tip adları: 'Map<String, List<Order>>' -> Map, String, List, Order */
 export function referencedSimpleNames(text: string): string[] {
   const out: string[] = [];
-  const re = /[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*/g;
-  for (const m of stripAnnotations(text).matchAll(re)) {
+  for (const m of stripAnnotations(text).matchAll(QUALIFIED_IDENT_RE)) {
     const seg = simpleName(m[0].replace(/\s+/g, ''));
-    if (/^[A-Z]/.test(seg)) out.push(seg);
+    if (UPPER_START_RE.test(seg)) out.push(seg);
     // nitelikli adın ilk büyük harfli parçası da (Outer.Inner -> Outer)
-    const first = m[0].split('.').map((s) => s.trim()).find((s) => /^[A-Z]/.test(s));
+    const first = m[0].split('.').map((s) => s.trim()).find((s) => UPPER_START_RE.test(s));
     if (first && first !== seg) out.push(first);
   }
   return out;
@@ -169,18 +221,40 @@ export function sourceRootOf(path: string, packageName?: string): string {
   return dir;
 }
 
-/** Test kaynağı mı: `src/test/` veya herhangi bir `test`/`tests` dizini altında ya da dosya adı `*Test*.java`. */
+/**
+ * Test kodu dizinleri: `src/test*`, `src/it`, `src/integrationTest`, `src/integration-test`, `src/testFixtures`;
+ * test kütüphaneleri (`*-testlib/`, `testlib/`), test modülleri (`*-tests/`, ör. guava-tests) ve `test/`, `tests/`
+ * dizinleri. (Tek başına `it/` segmenti test değildir: `it.firma` gibi paketler olabilir.)
+ */
+const TEST_DIR_RE = /\/(?:src\/(?:test[\w-]*|it|integrationTest|integration-test)\/|[\w.-]*-testlib\/|testlib\/|[\w.-]+-tests\/|tests?\/|testFixtures\/|integrationTest\/)/;
+/**
+ * Test sınıfı adları: `TestX`, `XTest`, `XTests`, `XIT`, `XITCase`, `XTestCase`, `XTester`, `XSpec`.
+ * `IT`/`Tester`/`Spec` sonekinden önce küçük harf ya da rakam gerekir; tamamı büyük harfli adlar (`AUDIT`) test değildir.
+ */
+const TEST_NAME_RE = /^(?:Test\p{Lu}[\p{L}\p{N}_$]*|[\p{L}\p{N}_$]*(?:Test|Tests|TestCase|ITCase)|[\p{L}\p{N}_$]*[\p{Ll}\p{Nd}](?:IT|Tester|Spec))\.(?:java|kt|groovy|scala)$/u;
+
+/**
+ * Test kaynağı mı (tek kaynak; katman tespiti ve semantik diff aynı kuralı kullanır).
+ *  - Üretim kaynak kökü (`src/main/`) altındaki dosya yalnız kökten önceki dizinler test dizini ise (ör. `foo-tests/src/main/`)
+ *    test sayılır; ad kalıpları orada uygulanmaz (`src/main/.../OrderSpec.java` üretim kodudur).
+ *  - Diğer yerlerde test dizinleri ya da test sınıfı ad kalıpları.
+ */
 export function isTestPath(path: string): boolean {
   const norm = `/${path.replace(/\\/g, '/')}`;
-  if (/\/(?:test|tests|testFixtures|it|integrationTest)\//.test(norm)) return true;
-  return /Test[^/]*\.java$/.test(norm.slice(norm.lastIndexOf('/') + 1));
+  const slash = norm.lastIndexOf('/');
+  const main = norm.lastIndexOf('/src/main/');
+  if (main >= 0) return TEST_DIR_RE.test(norm.slice(0, main + 1));
+  if (TEST_DIR_RE.test(norm.slice(0, slash + 1))) return true;
+  const name = norm.slice(slash + 1);
+  if (!HAS_LOWER_RE.test(name.replace(/\.[^.]*$/, ''))) return false;
+  return TEST_NAME_RE.test(name);
 }
 
 // ---------------------------------------------------------------------------
-// Tip değişkeni normalizasyonu (B9)
+// Tip değişkeni normalizasyonu
 // ---------------------------------------------------------------------------
 
-const IDENT_RE = /[A-Za-z_$][\w$]*/g;
+const IDENT_RE = new RegExp(IDENT, 'gu');
 
 /**
  * Tip değişkenlerini pozisyonel yer tutuculara çevirir: `names[i]` -> `${prefix}${i}`.
@@ -199,7 +273,7 @@ export function renameTypeVars(text: string, map: ReadonlyMap<string, string>): 
       i = k + 1;
       continue;
     }
-    if (/[A-Za-z_$]/.test(ch) && (i === 0 || !/[\w$]/.test(text[i - 1] as string))) {
+    if (ID_START_RE.test(ch) && (i === 0 || !ID_PART_RE.test(text[i - 1] as string))) {
       IDENT_RE.lastIndex = i;
       const m = IDENT_RE.exec(text);
       const word = m ? m[0] : ch;

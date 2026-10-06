@@ -1,5 +1,5 @@
 /**
- * tree-sitter-java'nın desteklemediği sözdizimlerinin ayrıştırma öncesi maskelenmesi (B4).
+ * tree-sitter-java'nın desteklemediği sözdizimlerinin ayrıştırma öncesi maskelenmesi.
  *
  * Bilinen açık: varargs tip anotasyonu `Object @Nullable ... args` (JLS 8.4.1). tree-sitter-java bunu ERROR yapar,
  * parametre ve sonraki bildirimler kaybolur. Diğer tip-kullanım anotasyonları (`Outer.@A Inner`, `String @A []`,
@@ -10,6 +10,7 @@
  * normalizasyon tokenlarına ekler, böylece normalizedText/normalizedBody maskelemeden etkilenmez.
  * Maskeleme içerik deterministiktir (yalnız kaynağa bağlı), iki diff tarafı aynı biçimde işlenir.
  */
+import { ID_PART_RE, ID_START_RE, IDENT } from './names.js';
 
 export interface MaskedSpan {
   s: number;
@@ -22,8 +23,8 @@ export interface MaskResult {
   spans: MaskedSpan[];
 }
 
-const ID_START = /[A-Za-z_$]/;
-const ID_PART = /[\w$]/;
+const ID_START = ID_START_RE;
+const ID_PART = ID_PART_RE;
 
 function isWs(ch: string | undefined): boolean {
   return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\f';
@@ -93,8 +94,23 @@ function annotationEnd(src: string, i: number): number | undefined {
   }
   const paren = skipTrivia(src, k);
   if (src[paren] !== '(') return k;
-  let depth = 0;
-  let j = paren;
+  const close = closers(src).get(paren);
+  return close === undefined ? undefined : close + 1;
+}
+
+let lastSrc: string | undefined;
+let lastClosers: Map<number, number> | undefined;
+
+/**
+ * Kaynaktaki her '(' için eşleşen ')' konumu (string/char/text block literalleri ve yorumlar atlanır). Tek doğrusal
+ * geçiş; kapanmayan parantez haritada yoktur. (Her anotasyondan ayrı ayrı ileri tarama, kapanmayan `@A(` dizilerinde
+ * ikinci dereceden süre alır.)
+ */
+function closers(src: string): Map<number, number> {
+  if (lastSrc === src && lastClosers) return lastClosers;
+  const out = new Map<number, number>();
+  const stack: number[] = [];
+  let j = 0;
   while (j < src.length) {
     const ch = src[j] as string;
     if (ch === '"' || ch === "'") {
@@ -106,14 +122,16 @@ function annotationEnd(src: string, i: number): number | undefined {
       j = c;
       continue;
     }
-    if (ch === '(') depth++;
+    if (ch === '(') stack.push(j);
     else if (ch === ')') {
-      depth--;
-      if (depth === 0) return j + 1;
+      const open = stack.pop();
+      if (open !== undefined) out.set(open, j);
     }
     j++;
   }
-  return undefined;
+  lastSrc = src;
+  lastClosers = out;
+  return out;
 }
 
 /**
@@ -170,6 +188,9 @@ export function maskVarargsAnnotations(src: string): MaskResult | undefined {
     if (src.startsWith('...', after) && (ID_PART.test(prev) || prev === '>' || prev === ']')) spans.push(...seq);
     i = last.e;
   }
+  // Parantez eşleme önbelleği yalnız bu çağrı içindir; kaynağı bellekte tutmasın.
+  lastSrc = undefined;
+  lastClosers = undefined;
   if (spans.length === 0) return undefined;
   let out = '';
   let pos = 0;
@@ -181,8 +202,10 @@ export function maskVarargsAnnotations(src: string): MaskResult | undefined {
   return { source: out, spans };
 }
 
-const TOKEN_RE =
-  /"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\/\/[^\n]*|\/\*[\s\S]*?\*\/|[A-Za-z_$][\w$]*|\d[\w.]*|>>>=|<<=|>>=|>>>|->|::|\+\+|--|&&|\|\||[=!<>+\-*/%&|^]=|<<|\S/g;
+const TOKEN_RE = new RegExp(
+  `"""[\\s\\S]*?"""|"(?:\\\\.|[^"\\\\\\n])*"?|'(?:\\\\.|[^'\\\\\\n])*'?|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/|${IDENT}|\\d[\\w.]*|>>>=|<<=|>>=|>>>|->|::|\\+\\+|--|&&|\\|\\||[=!<>+\\-*/%&|^]=|<<|\\S`,
+  'gu',
+);
 
 /** Maskelenen metnin tokenları (yorumlar hariç), mutlak konumlarıyla. */
 export function maskedTokens(src: string, spans: readonly MaskedSpan[]): { s: number; e: number; t: string }[] {

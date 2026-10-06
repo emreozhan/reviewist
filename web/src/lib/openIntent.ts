@@ -1,3 +1,5 @@
+import { modLabel } from './platform';
+
 /**
  * Bağlantı tıklama niyeti (koddaki referanslar, yayılım satırları, rozet menüleri, etki haritası düğümleri):
  *   düz tık / Enter          → 'peek'        orta panelin önünde gözatma penceresi (iç içe yığın)
@@ -19,5 +21,17 @@ export function intentOf(e: IntentEventLike): OpenIntent {
   return 'peek';
 }
 
-/** Bağlantı ipuçlarının ortak kuyruğu. */
-export const INTENT_HINT = 'Tık: gözat (açılır pencere) · Shift+tık: sekmede aç · Ctrl+tık: arka plan sekmesi';
+/** Arka plan sekmesi değiştiricisiyle tık etiketi: macOS'ta `⌘+tık`, diğerlerinde `Ctrl+tık`. */
+export function bgClickLabel(mod: string = modLabel): string {
+  return `${mod}+tık`;
+}
+
+/** Bağlantı ipuçlarının ortak kuyruğu (platforma göre ⌘ / Ctrl). */
+export function intentHint(mod: string = modLabel): string {
+  return `Tık: pencerede aç · Shift+tık: sekmede aç · ${bgClickLabel(mod)}: arka plan sekmesi`;
+}
+
+export const INTENT_HINT: string = intentHint();
+
+/** Arka plan sekmesi tık etiketi (ör. `⌘+tık` / `Ctrl+tık`). */
+export const BG_CLICK: string = bgClickLabel();

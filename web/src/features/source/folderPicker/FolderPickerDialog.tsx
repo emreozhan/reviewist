@@ -11,6 +11,7 @@ import { FolderPickerFooter } from './FolderPickerFooter';
 import { FolderSidebar } from './FolderSidebar';
 import { folderStatus } from './folderStatus';
 import { useFolderBrowser } from './useFolderBrowser';
+import { modLabel } from '../../../lib/platform';
 
 interface FolderPickerDialogProps {
   /** Alanın mevcut değeri (mutlaksa pencere onun üst klasöründe, o klasör seçili açılır). */
@@ -133,7 +134,7 @@ export function FolderPickerDialog({ initialPath, onPick, onClose }: FolderPicke
             <Switch size="sm" checked={b.hidden} onChange={b.setHidden} label="Gizli klasörleri göster" />
             {listing?.truncated && <span className="fp-tools__note">İlk {listing.entries.length} klasör gösteriliyor; yolu yazarak daraltın.</span>}
             <span className="fp-tools__keys" aria-hidden="true">
-              ↑↓ gez · Enter gir · ⌫ üst · harf yaz: ada atla · Ctrl+Enter seç
+              ↑↓ gez · Enter gir · ⌫ üst · harf yaz: ada atla · {modLabel}+Enter seç
             </span>
           </div>
         </section>

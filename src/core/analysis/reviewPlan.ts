@@ -10,8 +10,10 @@
  */
 import type { FileChange, Layer, ReviewStep, RiskLevel } from '../../shared/types.js';
 import type { TypeDiff } from '../java/model.js';
+import { identWordRegExp, TEST_STEM_PATTERN } from '../java/names.js';
 import { isBreakingSignature, isSemanticChange } from './risk.js';
 import { basename, BinaryHeap, RISK_LEVEL_ORDER, symbolLabel } from './util.js';
+import { compareStrings } from '../compare.js';
 
 const LEVEL_TR: Record<RiskLevel, string> = { low: 'düşük', medium: 'orta', high: 'yüksek', critical: 'kritik' };
 const ADAPTER_LAYERS = new Set<Layer>(['adapter-in', 'adapter-out', 'controller', 'repository']);
@@ -56,7 +58,7 @@ function categorize(file: FileChange, tds: readonly TypeDiff[]): Category {
 }
 
 function prioCompare(a: Node, b: Node): number {
-  return CAT_ORDER[a.cat] - CAT_ORDER[b.cat] || b.file.risk.score - a.file.risk.score || a.file.path.localeCompare(b.file.path);
+  return CAT_ORDER[a.cat] - CAT_ORDER[b.cat] || b.file.risk.score - a.file.risk.score || compareStrings(a.file.path, b.file.path);
 }
 
 /** Üretim düğümlerinin okuma sırası (0 tabanlı rank). Bağımlılıklar yalnızca `prod` içindekiler sayılır. */
@@ -118,7 +120,7 @@ export function changeSummary(tds: readonly TypeDiff[], file?: FileChange): stri
 
 function memberSymbolIds(tds: readonly TypeDiff[]): string[] {
   const mems = tds.flatMap((td) => td.members.filter((m) => isSemanticChange(m.change.status)).map((m) => m.change));
-  mems.sort((a, b) => b.risk.score - a.risk.score || a.id.localeCompare(b.id));
+  mems.sort((a, b) => b.risk.score - a.risk.score || compareStrings(a.id, b.id));
   const ids = mems.map((m) => m.id);
   if (ids.length) return [...new Set(ids)];
   return tds.filter((td) => isSemanticChange(td.change.status)).map((td) => td.change.id);
@@ -200,10 +202,10 @@ export function buildReviewPlan(files: readonly FileChange[], typeDiffsByFile: R
       push(t.file.path, memberSymbolIds(t.tds), `Test: ${prodName} değişikliklerini doğrulayan test (${changeSummary(t.tds, t.file)})`);
     }
   }
-  for (const t of tests.sort((a, b) => b.file.risk.score - a.file.risk.score || a.file.path.localeCompare(b.file.path))) {
+  for (const t of tests.sort((a, b) => b.file.risk.score - a.file.risk.score || compareStrings(a.file.path, b.file.path))) {
     if (!placed.has(t.file.path)) push(t.file.path, memberSymbolIds(t.tds), `Test: ${changeSummary(t.tds, t.file)}`);
   }
-  for (const n of [...nodes.values()].filter((x) => x.cat === '6').sort((a, b) => a.file.path.localeCompare(b.file.path))) {
+  for (const n of [...nodes.values()].filter((x) => x.cat === '6').sort((a, b) => compareStrings(a.file.path, b.file.path))) {
     push(n.file.path, [], 'Yalnızca biçim değişikliği (boşluk/import/yorum); hızlıca geçilebilir');
   }
   for (const s of steps) {
@@ -213,11 +215,7 @@ export function buildReviewPlan(files: readonly FileChange[], typeDiffsByFile: R
   return steps;
 }
 
-const TEST_STEM_RE = /^(?:Test(?=[A-Z]))?(\w+?)(?:Test|Tests|IT|ITCase|IntegrationTest|Spec)?$/;
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
+const TEST_STEM_RE = TEST_STEM_PATTERN;
 
 /** Test kodunda üretim düğümünün (değişen) tip adlarının geçme sayısı. */
 function referenceCount(test: Node, prodNode: Node): number {
@@ -226,7 +224,7 @@ function referenceCount(test: Node, prodNode: Node): number {
   const names = new Set(semanticTypes(prodNode.tds).map((td) => td.change.name));
   if (names.size === 0) for (const td of prodNode.tds) names.add(td.change.name);
   let n = 0;
-  for (const name of names) n += code.match(new RegExp(`\\b${escapeRe(name)}\\b`, 'g'))?.length ?? 0;
+  for (const name of names) n += code.match(identWordRegExp(name, 'g'))?.length ?? 0;
   return n;
 }
 
@@ -262,7 +260,7 @@ function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string,
     if (subject) {
       let best: string | undefined;
       for (const s of byStem.keys()) {
-        if (s.length < 4 || s.length >= subject.length || !subject.startsWith(s) || !/[A-Z0-9_]/.test(subject[s.length])) continue;
+        if (s.length < 4 || s.length >= subject.length || !subject.startsWith(s) || !/[\p{Lu}\p{Nd}_]/u.test(subject[s.length] as string)) continue;
         if (!best || s.length > best.length) best = s;
       }
       if (best) {
@@ -276,7 +274,7 @@ function attachTests(tests: readonly Node[], prod: readonly Node[]): Map<string,
       continue;
     }
     if (cands.length > 1) {
-      const scored = cands.map((p) => ({ p, n: referenceCount(t, byPath.get(p) as Node) })).sort((a, b) => b.n - a.n || a.p.localeCompare(b.p));
+      const scored = cands.map((p) => ({ p, n: referenceCount(t, byPath.get(p) as Node) })).sort((a, b) => b.n - a.n || compareStrings(a.p, b.p));
       if (scored[0].n > 0 && scored[0].n > (scored[1]?.n ?? 0)) out.set(t.file.path, scored[0].p);
     }
   }

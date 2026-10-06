@@ -330,19 +330,39 @@ function reviveEntry(v: unknown): HistoryEntry | null {
   };
 }
 
-/** Kayıtlı durumu doğrular; `isKnownDiffFile` false dönen diff içi sekmeler (review değişti) atılır. */
+/**
+ * `inDiff` bayrağını güncel incelemeden yeniden hesaplar (kayıtlı değere güvenilmez): aynı kaynak yeniden analiz
+ * edilince diff dışıyken açılmış ama artık değişmiş dosya diff sekmesine, artık değişmeyen dosya salt okunur
+ * Kaynak sekmesine döner. Eski taraf ('old') sekmeleri diff'e çevrilmez (yalnız diff dışına düşebilir).
+ */
+function withCurrentInDiff<T extends { inDiff: boolean; path: string; side: TabSide }>(t: T, isKnownDiffFile: (path: string) => boolean): T {
+  const inDiff = t.side === 'new' ? isKnownDiffFile(t.path) : t.inDiff && isKnownDiffFile(t.path);
+  return inDiff === t.inDiff ? t : { ...t, inDiff };
+}
+
+/** Bellekteki sekmeleri güncel incelemeyle uzlaştırır (değişiklik yoksa aynı nesne döner). */
+export function reconcileInDiff(state: TabsState, isKnownDiffFile: (path: string) => boolean): TabsState {
+  const tabs = state.tabs.map((t) => withCurrentInDiff(t, isKnownDiffFile));
+  const history = state.history.map((e) => withCurrentInDiff(e, isKnownDiffFile));
+  const same = tabs.every((t, i) => t === state.tabs[i]) && history.every((e, i) => e === state.history[i]);
+  return same ? state : { ...state, tabs, history };
+}
+
+/** Kayıtlı durumu doğrular; `inDiff` bayrağı güncel incelemeden yeniden hesaplanır (bkz. `reconcileInDiff`). */
 export function reviveTabs(raw: unknown, isKnownDiffFile: (path: string) => boolean): TabsState {
   if (typeof raw !== 'object' || raw === null) return EMPTY_TABS;
   const o = raw as Record<string, unknown>;
-  const valid = (t: { inDiff: boolean; path: string }) => !t.inDiff || isKnownDiffFile(t.path);
   const seen = new Set<string>();
   const tabs = (Array.isArray(o.tabs) ? o.tabs : [])
     .map(reviveTab)
-    .filter((t): t is EditorTab => t !== null && valid(t) && !seen.has(t.key) && !!seen.add(t.key))
+    .filter((t): t is EditorTab => t !== null)
+    .map((t) => withCurrentInDiff(t, isKnownDiffFile))
+    .filter((t) => !seen.has(t.key) && !!seen.add(t.key))
     .slice(0, MAX_TABS);
   const history = (Array.isArray(o.history) ? o.history : [])
     .map(reviveEntry)
-    .filter((e): e is HistoryEntry => e !== null && valid(e))
+    .filter((e): e is HistoryEntry => e !== null)
+    .map((e) => withCurrentInDiff(e, isKnownDiffFile))
     .slice(-MAX_HISTORY);
   const activeKey = isStr(o.activeKey) && tabs.some((t) => t.key === o.activeKey) ? o.activeKey : (tabs[0]?.key ?? null);
   const rawCursor = optNum(o.cursor) ?? history.length - 1;

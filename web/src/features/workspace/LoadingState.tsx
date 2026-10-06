@@ -23,7 +23,7 @@ export function LoadMeter({ progress }: { progress: LoadProgress | undefined }) 
       <div
         className={`loadm__track${pct === undefined ? ' is-indeterminate' : ''}`}
         role="progressbar"
-        aria-label="Review yükleniyor"
+        aria-label="İnceleme yükleniyor"
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={pct}
@@ -44,7 +44,7 @@ export function LoadingState({ id }: { id: string }) {
   return (
     <div className="screen-state" aria-busy="true">
       <span className="screen-state__pulse" aria-hidden="true" />
-      <p>Review yükleniyor…</p>
+      <p>İnceleme yükleniyor…</p>
       <LoadMeter progress={progress} />
     </div>
   );

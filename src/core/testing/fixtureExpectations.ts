@@ -1,5 +1,5 @@
 /**
- * YALNIZCA TEST İÇİN: fixtures/EXPECTED.md (main...feature/ai-refactor) beklentilerinin A2 (analiz) ile ilgili kısmı.
+ * YALNIZCA TEST İÇİN: fixtures/EXPECTED.md (main...feature/ai-refactor) beklentilerinin analiz katmanıyla ilgili kısmı.
  * Tüm uyuşmazlıkları tek seferde görmek için hata fırlatmak yerine sorun listesi döner.
  */
 import type { MemberChange, ReviewModel, RiskLevel } from '../../shared/types.js';

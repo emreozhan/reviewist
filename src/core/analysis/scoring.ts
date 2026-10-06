@@ -57,6 +57,7 @@ export function scoreAll(ctx: AnalysisContext): void {
 
 function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
   const isTest = af.file.isTest;
+  const parseUncertain = !!(af.oldModel?.hasErrors || af.newModel?.hasErrors);
   if (af.typeDiffs.length === 0) {
     af.file.risk = scoreNonJavaFile(af.file, { unanalyzedJava: af.unanalyzed });
     return;
@@ -89,6 +90,7 @@ function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
         changedSiblingNames,
         hookNames,
         architecture: ctx.architecture.get(mc.id),
+        parseUncertain,
       });
       risks.push(mc.risk);
     }
@@ -96,6 +98,7 @@ function scoreFile(ctx: AnalysisContext, af: AnalyzedFile): void {
       architecture: ctx.architecture.get(ch.id),
       importRetargets: ctx.importRetargets.get(ch.id),
       meaningfulImport: isMeaningfulImport,
+      parseUncertain,
     });
     typeRisks.push(ch.risk);
     memberRisks.push(...risks);

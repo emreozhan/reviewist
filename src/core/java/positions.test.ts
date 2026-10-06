@@ -1,5 +1,5 @@
 /**
- * Tur 4: kod gezinme için konumlar (çağrı adı sütunları, bildirim adları, tip referansları).
+ * Kod gezinme için konumlar (çağrı adı sütunları, bildirim adları, tip referansları).
  * Sütunlar satır içi 0 tabanlı UTF-16 kod birimi, [start, end).
  */
 import { describe, expect, it } from 'vitest';

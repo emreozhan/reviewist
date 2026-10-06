@@ -20,8 +20,12 @@ export interface RefSpan {
 
 const TOKEN_RE = /<[^>]*>|&#?\w+;|[^<&]+|[<&]/g;
 
+/** Yalnız güvenli öznitelik adları (data-*, aria-*, title, role, tabindex); olay öznitelikleri (`on…`) ve diğerleri atılır. */
+const SAFE_ATTR = /^(?:data-[a-z0-9-]+|aria-[a-z]+|title|role|tabindex)$/;
+
 function openTag(s: RefSpan): string {
   const attrs = Object.entries(s.attrs)
+    .filter(([k]) => SAFE_ATTR.test(k))
     .map(([k, v]) => ` ${k}="${escapeHtml(v)}"`)
     .join('');
   return `<span class="${escapeHtml(s.cls)}"${attrs}>`;

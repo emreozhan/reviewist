@@ -39,7 +39,7 @@ export class TestLocator {
     const byReference = new Set<string>();
     for (const t of types) {
       const candidates = [...SUFFIXES.map((s) => `${t.name}${s}`), `Test${t.name}`];
-      for (const c of candidates) for (const e of EXTS) for (const p of this.byBase.get(`${c}${e}`) ?? []) byName.add(p);
+      for (const c of candidates) for (const e of EXTS) for (const p of this.byBase.get(`${c}${e}`) ?? []) if (isTestPath(p)) byName.add(p);
     }
     for (const t of types) for (const p of this.referencing(t.fqn)) if (isTestPath(p) && !byName.has(p)) byReference.add(p);
     byName.delete(path);

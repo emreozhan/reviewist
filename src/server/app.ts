@@ -23,14 +23,14 @@ import type {
 import type { ReviewArtifacts } from '../core/buildReview.js';
 import { ReviewNavigator } from '../core/navigation.js';
 import { createChangeSet, parseReviewRequest, type CreateChangeSetOptions } from '../sources/index.js';
-import { isNetworkPath, NETWORK_PATH_MESSAGE, sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
+import { expandHome, isNetworkPath, NETWORK_PATH_MESSAGE, sanitizeRepoRelPath, type ManagedChangeSet } from '../sources/common.js';
 import { isSourceError, shortMessage, SourceError } from '../sources/errors.js';
 import { getGitRefs } from '../sources/git.js';
 import { DEFAULT_TOKEN_ENVS, resolveGithubToken } from '../sources/github.js';
 import { listDirectory } from './fsList.js';
 import { AnalysisQueue, JobManager, toApiError } from './jobs.js';
 
-/** `src/core/buildReview.ts` sözleşmesi (docs/CONTRACT.md). */
+/** `src/core/buildReview.ts` seçenekleri (bkz. docs/ARCHITECTURE.md). */
 export interface BuildReviewOptions {
   id?: string;
   maxIndexFiles?: number;
@@ -189,6 +189,7 @@ export class ReviewStore {
         createdAt: model.createdAt,
         kind: model.source.kind,
         files: model.files.length,
+        stableKey: model.source.stableKey,
       }))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -347,7 +348,7 @@ function isBuildReviewModule(mod: unknown): mod is EngineModule {
 
 let defaultEngine: Promise<EngineModule> | undefined;
 
-/** A2'nin motorunu derleme bağımlılığı olmadan yükler (dosya yoksa anlamlı hata). */
+/** Analiz motorunu ilk kullanımda yükler (yüklenemezse anlamlı hata). */
 async function loadDefaultBuildReview(): Promise<BuildReviewFn> {
   return (await loadEngine()).buildReview;
 }
@@ -362,10 +363,10 @@ async function loadDefaultBuildArtifacts(): Promise<BuildArtifactsFn> {
 
 async function loadEngine(): Promise<EngineModule> {
   defaultEngine ??= (async () => {
-    const specifier = '../core/buildReview.js';
     let mod: unknown;
     try {
-      mod = await import(specifier);
+      // Sabit yol: paketleyici (esbuild) motoru pakete dahil edebilsin; yine de ilk analizde tembel yüklenir.
+      mod = await import('../core/buildReview.js');
     } catch (err) {
       defaultEngine = undefined;
       throw new SourceError('Analiz motoru yüklenemedi (src/core/buildReview).', {
@@ -394,16 +395,16 @@ function newReviewId(): string {
   return `r-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
-/** İstekteki göreli depo yollarını defaultRepoPath'e (yoksa cwd) göre mutlaklaştırır. */
+/** İstekteki `~` kısaltmasını açar ve göreli depo yollarını defaultRepoPath'e (yoksa cwd) göre mutlaklaştırır. */
 function absolutizePaths(req: ReviewRequest, baseDir: string): ReviewRequest {
   switch (req.kind) {
     case 'git':
     case 'worktree':
-      return { ...req, repoPath: resolve(baseDir, req.repoPath) };
+      return { ...req, repoPath: resolve(baseDir, expandHome(req.repoPath)) };
     case 'github':
-      return req.localRepoPath ? { ...req, localRepoPath: resolve(baseDir, req.localRepoPath) } : req;
+      return req.localRepoPath ? { ...req, localRepoPath: resolve(baseDir, expandHome(req.localRepoPath)) } : req;
     case 'patch':
-      return req.repoPath ? { ...req, repoPath: resolve(baseDir, req.repoPath) } : req;
+      return req.repoPath ? { ...req, repoPath: resolve(baseDir, expandHome(req.repoPath)) } : req;
   }
 }
 
@@ -428,7 +429,9 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   const queue = new AnalysisQueue(Math.max(1, opts.maxConcurrentAnalyses ?? 2));
   const jobs = new JobManager({ ttlMs: opts.jobTtlMs, now: opts.now, onProgress: opts.onProgress });
   const tokenEnvNames = opts.tokenEnvNames ?? DEFAULT_TOKEN_ENVS;
-  const devPorts = opts.devPorts ?? [5173];
+  // Geliştirme arayüzünün (Vite) portu yalnızca API-only modda izinlidir; paketlenmiş arayüz sunulurken localhost:5173
+  // üzerindeki ilgisiz bir uygulama API'ye yazamamalı.
+  const devPorts = opts.devPorts ?? (opts.staticDir ? [] : [5173]);
   const makeChangeSet: CreateChangeSetFn = opts.createChangeSet ?? createChangeSet;
   let initialReviewId: string | undefined;
   let closed = false;
@@ -464,6 +467,8 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
         // Kaynak uyarıları (analiz sırasında eklenenler dahil) modele eklenir.
         const merged = [...cs.warnings, ...(model.warnings ?? [])];
         model.warnings = [...new Set(merged)];
+        // Analiz için dolan içerik önbelleği artık gerekmez (dosya görünümü isteklerinde yeniden okunur).
+        cs.compact?.();
         store.add(model, cs);
         if (artifacts) navs.set(model.id, new ReviewNavigator(model, artifacts));
         return model;
@@ -492,11 +497,18 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
     if (!isLoopbackHost(host)) {
       return apiError(c, 403, 'İzin verilmeyen Host başlığı. Reviewist yalnızca localhost üzerinden kullanılabilir.', `host: ${host}`);
     }
-    const method = c.req.method;
-    if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
-      const origin = c.req.header('origin');
-      if (origin !== undefined && !isAllowedOrigin(origin, host, devPorts)) {
-        return apiError(c, 403, 'İzin verilmeyen Origin. İstekler yalnızca Reviewist arayüzünden gönderilebilir.', `origin: ${origin}`);
+    // Origin başlığı varsa (her yöntemde) Reviewist arayüzüne ait olmalı.
+    const origin = c.req.header('origin');
+    if (origin !== undefined && !isAllowedOrigin(origin, host, devPorts)) {
+      return apiError(c, 403, 'İzin verilmeyen Origin. İstekler yalnızca Reviewist arayüzünden gönderilebilir.', `origin: ${origin}`);
+    }
+    // API'ye başka bir siteden gelen istekler (img/script/form/fetch) reddedilir: GET uçları da git çalıştırır ve
+    // kaynak kod döndürür. Tarayıcılar Sec-Fetch-Site gönderir; göndermeyen istemciler (curl) Host denetimiyle kalır.
+    // 'none' = adres çubuğundan doğrudan açılış.
+    if (c.req.path.startsWith('/api/')) {
+      const site = c.req.header('sec-fetch-site');
+      if (site !== undefined && site !== 'same-origin' && site !== 'none') {
+        return apiError(c, 403, 'Bu istek başka bir siteden geliyor. API yalnızca Reviewist arayüzünden kullanılabilir.', `sec-fetch-site: ${site}`);
       }
     }
     await next();
@@ -516,8 +528,9 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
   });
 
   app.get('/api/git/refs', async (c) => {
-    const q = c.req.query('repoPath')?.trim();
-    if (q && isNetworkPath(q)) return apiError(c, 400, NETWORK_PATH_MESSAGE, undefined, 'repoPath');
+    const typed = c.req.query('repoPath')?.trim();
+    if (typed && isNetworkPath(typed)) return apiError(c, 400, NETWORK_PATH_MESSAGE, undefined, 'repoPath');
+    const q = typed ? expandHome(typed) : undefined;
     const repoPath = q ? resolve(opts.defaultRepoPath ?? process.cwd(), q) : opts.defaultRepoPath;
     if (!repoPath) {
       return apiError(c, 400, 'repoPath parametresi gerekli (sunucu bir depo içinde başlatılmadı).', undefined, 'repoPath');
@@ -525,13 +538,8 @@ export function createApp(opts: CreateAppOptions = {}): ReviewistApp {
     return c.json(await getGitRefs(repoPath));
   });
 
-  // (Tur 5) Klasör seçici: yalnız klasör adları. Başka bir siteden tetiklenen istek (img/link) reddedilir;
-  // Sec-Fetch-Site göndermeyen istemciler (curl, eski tarayıcı) Host denetimiyle sınırlı kalır.
+  // Klasör seçici: yalnız klasör adları döner (başka sitelerden gelen istekler yukarıdaki genel denetimde reddedilir).
   app.get('/api/fs/list', async (c) => {
-    const site = c.req.header('sec-fetch-site');
-    if (site === 'cross-site' || site === 'same-site') {
-      return apiError(c, 403, 'Klasör listesi yalnızca Reviewist arayüzünden istenebilir.', `sec-fetch-site: ${site}`);
-    }
     const hidden = c.req.query('hidden') === '1';
     return c.json(await listDirectory(c.req.query('path'), { hidden, cwd: opts.defaultRepoPath ?? process.cwd() }));
   });

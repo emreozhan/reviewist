@@ -6,6 +6,7 @@ import { CATEGORY_LABEL } from '../../lib/selectors';
 import { SEVERITY_LABEL } from '../../lib/labels';
 import { baseName, symbolLabel } from '../../lib/reviewIndex';
 import { useReviewCtx } from '../workspace/ReviewContext';
+import { BG_CLICK } from '../../lib/openIntent';
 
 interface FindingCardProps {
   finding: Finding;
@@ -48,7 +49,7 @@ export function FindingCard({ finding, compact = false, showCategory = false }: 
         <button
           type="button"
           className="fcard__loc"
-          title="Konumu sekmede aç (Ctrl+tık: arka planda)"
+          title={`Konumu sekmede aç (${BG_CLICK}: arka planda)`}
           {...linkProps((background) => open({ file: finding.file, line: finding.line, symbolIds: finding.symbolIds }, { background }))}
         >
           {loc ?? 'İlgili sembole git'} <span aria-hidden="true">›</span>

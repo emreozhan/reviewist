@@ -4,15 +4,13 @@ import { navigationOrder, nextUnseen, planView, stepFile } from '../lib/selector
 import { useReviewCtx } from '../features/workspace/ReviewContext';
 import { useProgress } from '../state/progressStore';
 import { useUi } from '../state/uiStore';
+import { isTypingTarget } from '../lib/keyTarget';
 import { useSetTab } from './useNavigation';
 
-function isTypingTarget(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-}
-
-/** j/k: plan içinde sonraki/önceki, n: sonraki görülmemiş, v: görüldü, /: arama, g: etki haritası, ?: yardım. */
+/**
+ * j/k: plan içinde sonraki/önceki, n: sonraki görülmemiş, v: görüldü (yalnız çalışma alanında), /: arama,
+ * g: etki haritası, ?: yardım. Yalnız metin giriş alanlarında kapanır; onay kutusu/düğme odaktayken çalışır.
+ */
 export function useShortcuts(tab: Tab): void {
   const { review, index } = useReviewCtx();
   const setTab = useSetTab();
@@ -43,7 +41,9 @@ export function useShortcuts(tab: Tab): void {
           go(nextUnseen(order, current, progress.seen));
           break;
         case 'v':
-          if (current) progress.toggleSeen(current);
+          // Grafik/bulgular görünümünde seçili dosya görünmez: kör işaretleme yapılmaz.
+          if (tab !== 'workspace' || !current) return;
+          progress.toggleSeen(current);
           break;
         case '/':
           e.preventDefault();

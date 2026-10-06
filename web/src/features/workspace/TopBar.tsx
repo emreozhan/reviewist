@@ -3,6 +3,7 @@ import { MockBadge } from '../../components/MockBadge';
 import { ThemeToggle } from '../../components/ThemeToggle';
 import type { Tab } from '../../lib/route';
 import { formatHash } from '../../lib/route';
+import { safeHref } from '../../lib/safeHref';
 import { useUi } from '../../state/uiStore';
 import { ExportMenu } from './ExportMenu';
 import { ProgressMeter } from './ProgressMeter';
@@ -16,6 +17,7 @@ export function TopBar({ tab }: { tab: Tab }) {
   const { review, index } = useReviewCtx();
   const setHelpOpen = useUi((s) => s.setHelpOpen);
   const s = review.source;
+  const prHref = safeHref(s.prUrl);
   const counts = index.findingCounts.total;
   const errors = counts.error;
   const tabs: { id: Tab; label: string; icon: 'list' | 'graph' | 'flag'; count?: number }[] = [
@@ -41,15 +43,15 @@ export function TopBar({ tab }: { tab: Tab }) {
             <span className="topbar__arrow" aria-label="karşılaştırılan">→</span>
             <span className="ref ref--head">{s.headRef}</span>
             {short(s.headSha) && <span className="sha">{short(s.headSha)}</span>}
-            {s.prUrl && (
-              <a className="topbar__pr" href={s.prUrl} target="_blank" rel="noreferrer">
+            {prHref && (
+              <a className="topbar__pr" href={prHref} target="_blank" rel="noopener noreferrer">
                 {s.prNumber ? `#${s.prNumber}` : 'PR'} <Icon name="external" size={11} />
               </a>
             )}
             {s.author && <span className="topbar__author">{s.author}</span>}
           </p>
         </div>
-        <nav className="topbar__tabs" aria-label="Review görünümleri">
+        <nav className="topbar__tabs" aria-label="İnceleme görünümleri">
           {tabs.map((t) => (
             <a
               key={t.id}

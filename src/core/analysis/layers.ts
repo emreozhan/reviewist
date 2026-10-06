@@ -16,6 +16,7 @@
  *  8. Uzantı: .sql/.yml/.properties → resource; diğer → other
  */
 import type { FileChange, Layer, TypeKind } from '../../shared/types.js';
+import { isTestPath } from '../java/names.js';
 import { annotationName, basename, dirname, simpleTypeName } from './util.js';
 
 export type Language = FileChange['language'];
@@ -35,12 +36,6 @@ export interface LayerInput {
 
 const BUILD_FILES = new Set(['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts', 'gradle.properties']);
 const MODULE_FILES = new Set(['pom.xml', 'build.gradle', 'build.gradle.kts']);
-/**
- * Test kodu dizinleri: src/test*, src/it, src/integration-test, src/testFixtures; test kütüphaneleri (`*-testlib/`,
- * `testlib/`) ve test modülleri (`*-tests/`, ör. guava-tests).
- */
-const TEST_DIR_RE = /(^|\/)(src\/(test[\w-]*|it|integrationTest|integration-test)\/|[\w.-]*-testlib\/|testlib\/|[\w.-]+-tests\/)/;
-const TEST_NAME_RE = /(^Test[A-Z]\w*|\w+(Test|Tests|IT|ITCase|TestCase|Tester|Spec))\.(java|kt|groovy|scala)$/;
 const SPRING_DATA_REPOS = new Set([
   'JpaRepository',
   'CrudRepository',
@@ -67,9 +62,8 @@ export function detectLanguage(path: string): Language {
   return 'other';
 }
 
-export function isTestPath(path: string): boolean {
-  return TEST_DIR_RE.test(path) || TEST_NAME_RE.test(basename(path));
-}
+/** Test yolu kuralı tek kaynaktan: bkz. java/names.ts `isTestPath`. */
+export { isTestPath };
 
 export function isBuildFile(path: string): boolean {
   return BUILD_FILES.has(basename(path));
@@ -151,16 +145,27 @@ export function detectLayer(input: LayerInput): Layer {
   return 'other';
 }
 
-/** Yol listesinde hexagonal paket düzeni var mı: adapter/port segmenti veya domain + application birlikte. */
+/**
+ * Repo hexagonal paket düzeni kullanıyor mu. Yalnız `.java` dosyalarının dizin (paket) yolları sayılır; tek bir
+ * `adapter`/`port` klasörü yetmez, birden çok bağımsız işaret gerekir:
+ *  - hem `port(s)` hem `adapter(s)` paketi, ya da
+ *  - `domain` + `application`/`usecase(s)` + `adapter(s)` paketleri.
+ */
 export function isHexagonalRepo(paths: Iterable<string>): boolean {
+  let port = false;
+  let adapter = false;
   let domain = false;
   let application = false;
   for (const p of paths) {
-    const segs = p.toLowerCase().split('/');
-    if (segs.includes('adapter') || segs.includes('adapters') || segs.includes('port') || segs.includes('ports')) return true;
-    if (segs.includes('domain')) domain = true;
-    if (segs.includes('application') || segs.includes('usecase') || segs.includes('usecases')) application = true;
-    if (domain && application) return true;
+    if (!p.toLowerCase().endsWith('.java')) continue;
+    const segs = dirname(p).toLowerCase().split('/');
+    for (const s of segs) {
+      if (s === 'port' || s === 'ports') port = true;
+      else if (s === 'adapter' || s === 'adapters') adapter = true;
+      else if (s === 'domain') domain = true;
+      else if (s === 'application' || s === 'usecase' || s === 'usecases') application = true;
+    }
+    if (adapter && (port || (domain && application))) return true;
   }
   return false;
 }

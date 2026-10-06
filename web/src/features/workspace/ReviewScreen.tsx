@@ -16,7 +16,7 @@ interface ReviewScreenProps {
   params: RouteParams;
 }
 
-/** Açılışta config.initialReviewId ile otomatik açılan review sunucuda yoksa (404) sessizce başlangıca dönülür. */
+/** Açılışta config.initialReviewId ile otomatik açılan inceleme sunucuda yoksa (404) sessizce başlangıca dönülür. */
 function useInitialReviewFallback(id: string, error: unknown): boolean {
   const attempt = useNotice((s) => s.initialAttemptId);
   const missing = attempt === id && isApiError(error) && error.status === 404;
@@ -24,7 +24,7 @@ function useInitialReviewFallback(id: string, error: unknown): boolean {
     if (!missing) return;
     const n = useNotice.getState();
     n.markInitialAttempt(null);
-    n.setNotice(`Son açılan review (${id}) sunucuda artık yok; yeni bir analiz başlatabilir ya da son review'lardan birini açabilirsiniz.`);
+    n.setNotice(`Son açılan inceleme (${id}) sunucuda artık yok; yeni bir analiz başlatabilir ya da son incelemelerden birini açabilirsiniz.`);
     navigate({ name: 'home' }, true);
   }, [missing, id]);
   return missing;
@@ -40,13 +40,14 @@ export function ReviewScreen({ id, tab, params }: ReviewScreenProps) {
   }, [query.isSuccess]);
 
   if (query.isPending || redirecting) return <LoadingState id={id} />;
-  if (query.isError) {
+  // Yeniden deneme (ör. sunucuya ulaşılamadı → Tekrar dene) başarısız olsa da eldeki inceleme gösterilmeye devam eder.
+  if (query.isError && !query.data) {
     return (
       <div className="screen-state">
         <MockBadge />
         <ErrorPanel
           error={query.error}
-          title="Review açılamadı"
+          title="İnceleme açılamadı"
           action={
             <a className="btn" href={formatHash({ name: 'home' })}>
               Başlangıca dön

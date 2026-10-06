@@ -4,6 +4,7 @@ import { Field } from '../../components/Field';
 import { FolderPathInput } from './folderPicker/FolderPathInput';
 import type { SourceFormProps } from './GitSourceForm';
 import { serverErrorFor } from './serverFieldError';
+import { SAMPLE_REPO_PATH } from '../../lib/platform';
 
 const PR_URL = /^https?:\/\/[^/]+\/[^/]+\/[^/]+\/pull\/\d+/;
 
@@ -51,7 +52,7 @@ export function GithubForm({ config, pending, onSubmit, serverError, onEdit }: S
         error={localPathError}
         hint="Verirseniz diff dışındaki çağıranlar ve alt sınıflar bu klondan indekslenir (yayılım analizi tam olur). Vermezseniz analiz yalnızca PR'daki dosyalarla sınırlı kalır."
       >
-        <FolderPathInput id="gh-local" value={localRepoPath} onChange={setLocalRepoPath} onPicked={onEdit} placeholder={config?.defaultRepoPath ?? 'C:/projeler/shop'} invalid={!!localPathError} describedBy={localPathError ? 'gh-local-error' : 'gh-local-hint'} />
+        <FolderPathInput id="gh-local" value={localRepoPath} onChange={setLocalRepoPath} onPicked={onEdit} placeholder={config?.defaultRepoPath ?? SAMPLE_REPO_PATH} invalid={!!localPathError} describedBy={localPathError ? 'gh-local-error' : 'gh-local-hint'} />
       </Field>
       <div className="source-form__actions">
         <button type="submit" className="btn btn--primary btn--lg" disabled={pending}>

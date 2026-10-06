@@ -18,13 +18,13 @@ function quote(text: string): string {
     .join('\n');
 }
 
-/** Notları, ilerlemeyi ve açık önemli bulguları review yorumu olarak yapıştırılabilir Markdown'a çevirir. */
+/** Notları, ilerlemeyi ve açık önemli bulguları inceleme yorumu olarak yapıştırılabilir Markdown'a çevirir. */
 export function buildMarkdown(review: ReviewModel, index: ReviewIndex, state: PersistedReviewState): string {
   const s = review.source;
   const entries = orderedEntries(review, index);
   const seenCount = entries.filter((e) => state.seen[e.file.id]).length;
   const out: string[] = [];
-  out.push(`# Review notları: ${s.title}`);
+  out.push(`# İnceleme notları: ${s.title}`);
   out.push('');
   const refs = `\`${s.baseRef}${s.baseSha ? ` (${shortSha(s.baseSha)})` : ''}\` → \`${s.headRef}${s.headSha ? ` (${shortSha(s.headSha)})` : ''}\``;
   out.push(`- Karşılaştırma: ${refs}`);
@@ -34,9 +34,11 @@ export function buildMarkdown(review: ReviewModel, index: ReviewIndex, state: Pe
 
   let noteCount = 0;
   const fileSections: string[] = [];
+  const used = new Set<string>();
   for (const { file } of entries) {
     const lines: string[] = [];
     const fileNote = state.notes[`file:${file.path}`];
+    used.add(`file:${file.path}`);
     if (fileNote?.trim()) lines.push(quote(fileNote));
     const symbolIds = new Set<string>();
     for (const typeId of file.typeIds) {
@@ -45,6 +47,7 @@ export function buildMarkdown(review: ReviewModel, index: ReviewIndex, state: Pe
     }
     for (const id of symbolIds) {
       const note = state.notes[`sym:${id}`];
+      used.add(`sym:${id}`);
       if (!note?.trim()) continue;
       const member = index.memberById.get(id);
       const line = member?.newRange?.startLine ?? member?.oldRange?.startLine;
@@ -55,10 +58,21 @@ export function buildMarkdown(review: ReviewModel, index: ReviewIndex, state: Pe
     noteCount += lines.length;
     fileSections.push(`### \`${file.path}\``, '', ...lines, '');
   }
+  // Diff dışı sembollere (etkilenen çağıranlar, alt tipler…) ve bu incelemede artık olmayan dosyalara yazılan notlar.
+  const outside = Object.entries(state.notes)
+    .filter(([k, v]) => !used.has(k) && v.trim() !== '')
+    .sort(([a], [b]) => a.localeCompare(b));
+  const outsideLines: string[] = [];
+  for (const [k, v] of outside) {
+    const label = k.startsWith('sym:') ? symbolLabel(index, k.slice(4)) : k.startsWith('file:') ? k.slice(5) : k;
+    outsideLines.push(`- **\`${label}\`**`, v.trim().split('\n').map((l) => `  ${l}`).join('\n'));
+  }
+
   out.push('## Notlar');
   out.push('');
-  if (noteCount === 0) out.push('_Henüz not yok._', '');
+  if (noteCount === 0 && outsideLines.length === 0) out.push('_Henüz not yok._', '');
   else out.push(...fileSections);
+  if (outsideLines.length > 0) out.push('## Diff dışı notlar', '', ...outsideLines, '');
 
   const important = review.findings.filter((f) => f.severity !== 'info');
   if (important.length > 0) {

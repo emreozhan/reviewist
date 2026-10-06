@@ -14,8 +14,8 @@ export function DeleteReviewButton({ title, pending, onConfirm }: DeleteReviewBu
       type="button"
       className={`recent__del${armed ? ' is-armed' : ''}`}
       disabled={pending}
-      aria-label={armed ? `"${title}" incelemesini silmeyi onayla` : `"${title}" incelemesini sil`}
-      title={armed ? 'Silmek için tekrar tıklayın' : 'Sil'}
+      aria-label={armed ? `"${title}" incelemesini silmeyi onayla (notlar ve görüldü işaretleri de silinir)` : `"${title}" incelemesini sil`}
+      title={armed ? 'Silmek için tekrar tıklayın: notlar ve görüldü işaretleri de silinir' : 'Sil (notlar ve görüldü işaretleri de silinir)'}
       onBlur={() => setArmed(false)}
       onKeyDown={(e) => {
         if (e.key === 'Escape') setArmed(false);

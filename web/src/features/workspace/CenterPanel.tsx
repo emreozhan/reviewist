@@ -28,7 +28,7 @@ function DiffFilePanel({ fileId }: { fileId: string }) {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [fileId]);
 
-  if (!file) return <p className="center__note">Dosya bu review'da bulunamadı: {fileId}</p>;
+  if (!file) return <p className="center__note">Dosya bu incelemede bulunamadı: {fileId}</p>;
   const hasStructure = file.language === 'java' && file.typeIds.length > 0 && !file.binary;
   const view = hasStructure ? (centerView ?? 'structure') : 'diff';
 

@@ -3,6 +3,7 @@ import type { DragEvent, KeyboardEvent, MouseEvent } from 'react';
 import type { FileStatus } from '../../../../src/shared/types';
 import { FILE_STATUS_META } from '../../lib/labels';
 import type { EditorTab } from '../../lib/tabs';
+import { altLabel } from '../../lib/platform';
 
 export const TAB_DRAG_TYPE = 'application/x-reviewist-tab';
 
@@ -113,7 +114,7 @@ export const TabItem = memo(function TabItem(p: TabItemProps) {
         <span className="etab__label">{tab.label}</span>
         {tab.preview && <span className="sr-only"> (önizleme)</span>}
       </button>
-      <button type="button" className="etab__close" tabIndex={-1} aria-label={`${tab.label} sekmesini kapat`} title="Kapat (Alt+W, orta tık)" onClick={() => p.onClose(tab.key)}>
+      <button type="button" className="etab__close" tabIndex={-1} aria-label={`${tab.label} sekmesini kapat`} title={`Kapat (${altLabel}+W, orta tık)`} onClick={() => p.onClose(tab.key)}>
         ×
       </button>
     </div>

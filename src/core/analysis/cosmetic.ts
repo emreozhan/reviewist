@@ -3,6 +3,7 @@
  */
 import type { DiffHunk, Finding } from '../../shared/types.js';
 import type { JavaFileModel, TypeDiff } from '../java/model.js';
+import { identWordRegExp } from '../java/names.js';
 import { isSemanticChange } from './risk.js';
 
 /**
@@ -70,7 +71,7 @@ export function importRetargets(oldModel: JavaFileModel, newModel: JavaFileModel
   const out: ImportRetarget[] = [];
   // Kullanılmayan import (kodda basit adı geçmiyor) anlam taşımaz: kozmetik kalır.
   const code = newModel.normalizedCode;
-  const used = (name: string) => new RegExp(`(^|[^\\w$])${name.replace(/\$/g, '\\$')}(?![\\w$])`).test(code);
+  const used = (name: string) => identWordRegExp(name).test(code);
   for (const [key, from] of a) {
     const to = b.get(key);
     if (to !== undefined && to !== from && used(lastSegment(from))) out.push({ name: lastSegment(from), from, to });

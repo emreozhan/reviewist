@@ -1,6 +1,6 @@
 /**
- * Tur 3 (QA tur 1 bulguları) birim testleri: sahte indeksle bayat çağrı (B1/B2), çift FQN id'leri (B3), import hedefi (B5),
- * risk gürültüsü (B8/B10), override kopması (B11), gruplama (B14) ve küçük maddeler.
+ * Doğruluk birim testleri: sahte indeksle bayat çağrı ve kalan overload, çift FQN id'leri, import hedefi, risk gürültüsü,
+ * override kopması, gruplama ve küçük maddeler.
  */
 import { describe, expect, it } from 'vitest';
 import type { CallRef, FileChange, Layer, RiskInfo } from '../../shared/types.js';
@@ -76,7 +76,7 @@ function removedRunFixture(callerMembers: JavaMember[] = [jMember({ ownerFqn: 'c
   return { td, svcFile, callerFile, id: oldRun.id };
 }
 
-describe('B1 — bayat çağrı güveni', () => {
+describe('bayat çağrı güveni', () => {
   it('name-only çağrı bulgu/risk üretmez; yalnız özet bilgide sayılır', () => {
     const { td, svcFile, callerFile, id } = removedRunFixture();
     const ctx = run([analyzed(svcFile.path, [td])], { files: [svcFile, callerFile], callsTo: { 'com.acme.Svc#run/0': [call('com.acme.C#go()', callerFile.path, 5, 'name-only')] } });
@@ -146,7 +146,7 @@ describe('B1 — bayat çağrı güveni', () => {
   });
 });
 
-describe('B1 — silinen iç tip, aynı adlı JDK tipi', () => {
+describe('silinen iç tip, aynı adlı JDK tipi', () => {
   it('java.util.Iterator üzerinden çağrı silinen DynamicHasher.Iterator#hasNext için bayat sayılmaz; tipi gören dosyadaki çağrı sayılır', () => {
     const OUT = 'p.hasher.DynamicHasher';
     const IT = `${OUT}.Iterator`;
@@ -165,7 +165,7 @@ describe('B1 — silinen iç tip, aynı adlı JDK tipi', () => {
   });
 });
 
-describe('B2 — aynı arity\'de kalan overload', () => {
+describe('aynı arity\'de kalan overload', () => {
   const U = 'com.acme.CharSequenceUtils';
   const p = (type: string, name = 'x') => ({ name, type, varargs: false });
   const oldM = jMember({ ownerFqn: U, name: 'indexOf', modifiers: ['static'], params: [p('CharSequence', 'cs'), p('int', 'searchChar'), p('int', 'start')] });
@@ -192,7 +192,7 @@ describe('B2 — aynı arity\'de kalan overload', () => {
   });
 });
 
-describe('B3 — çift FQN', () => {
+describe('çift FQN', () => {
   const mk = (root: string) => {
     const fqn = 'com.google.common.base.Preconditions';
     const o = jMember({ ownerFqn: fqn, name: 'checkNotNull', params: [{ name: 'r', type: 'T', varargs: false }] });
@@ -230,7 +230,7 @@ describe('B3 — çift FQN', () => {
   });
 });
 
-describe('B5 — import hedefi', () => {
+describe('import hedefi', () => {
   const entity = (imp: string, code = 'public class Owner { @Entity Object x; }') =>
     jFile('src/main/java/p/Owner.java', [jType({ fqn: 'p.Owner', normalizedText: code })], { imports: [imp, 'java.util.List'], normalizedCode: code });
 
@@ -256,7 +256,7 @@ describe('B5 — import hedefi', () => {
   });
 });
 
-describe('B8/B10 — risk gürültüsü', () => {
+describe('risk gürültüsü', () => {
   const m = jMember({ ownerFqn: 'com.acme.Calc', name: 'calc' });
   const body = (text: string) => ({ ...m, text });
   const md = memberDiff({ status: 'modified', oldMember: body('void calc() { a(); }'), newMember: body('void calc() { b(); }'), flags: ['body'] });
@@ -311,7 +311,7 @@ describe('B8/B10 — risk gürültüsü', () => {
   });
 });
 
-describe('B11 — override kopması', () => {
+describe('override kopması', () => {
   const B = 'com.acme.Base';
   const oldM = jMember({ ownerFqn: B, name: 'go', params: [{ name: 'a', type: 'int', varargs: false }] });
   const headBase = jType({ fqn: B, members: [] });
@@ -354,7 +354,7 @@ describe('B11 — override kopması', () => {
   });
 });
 
-describe('B14 — gruplama', () => {
+describe('gruplama', () => {
   const sym = (owner: string, name: string, status: 'modified' | 'signatureChanged' = 'modified') => {
     const m = jMember({ ownerFqn: owner, name, params: status === 'signatureChanged' ? [{ name: 'x', type: 'int', varargs: false }] : [] });
     return memberDiff({ status, oldMember: m, newMember: m, flags: status === 'signatureChanged' ? ['params'] : ['body'] });
@@ -447,10 +447,13 @@ describe('küçük maddeler', () => {
   });
 
   it('test katmanı: testlib, testFixtures, src/test*, *Tester, *TestCase', () => {
-    for (const p of ['guava-testlib/src/com/google/common/testing/EqualsTester.java', 'lib/testlib/X.java', 'src/testFixtures/java/X.java', 'src/testIntegration/java/X.java', 'core/src/main/java/a/MapTester.java', 'src/main/java/a/AbstractTestCase.java']) {
+    for (const p of ['guava-testlib/src/com/google/common/testing/EqualsTester.java', 'lib/testlib/X.java', 'src/testFixtures/java/X.java', 'src/testIntegration/java/X.java', 'core/src/a/MapTester.java', 'lib/a/AbstractTestCase.java']) {
       expect(isTestPath(p), p).toBe(true);
     }
     expect(isTestPath('src/main/java/a/Testimony.java')).toBe(false);
+    // üretim kökü altında ad kalıbı uygulanmaz
+    expect(isTestPath('core/src/main/java/a/MapTester.java')).toBe(false);
+    expect(isTestPath('src/main/java/a/AbstractTestCase.java')).toBe(false);
     expect(isTestPath('src/main/java/a/Contest.java')).toBe(false);
   });
 

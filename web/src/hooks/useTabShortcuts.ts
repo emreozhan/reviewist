@@ -1,21 +1,18 @@
 import { useEffect } from 'react';
+import { isTypingTarget } from '../lib/keyTarget';
+import { tabCycleDelta } from '../lib/shortcutRows';
 import { useLayout } from '../state/layoutStore';
+import { usePeek } from '../state/peekStore';
 import { useUi } from '../state/uiStore';
 import { useCodeNav } from './useCodeNav';
 import { useTabCommands } from './useTabCommands';
 
-function isTypingTarget(el: EventTarget | null): boolean {
-  if (!(el instanceof HTMLElement)) return false;
-  const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
-}
-
 /**
  * Sekme ve gezinme kısayolları:
  *   Alt+← / Alt+→           gezinme geçmişinde geri / ileri
- *   Ctrl+Tab / Ctrl+Shift+Tab, Alt+PageDown / Alt+PageUp   sonraki / önceki sekme
+ *   Alt+] / Alt+[ (e.code; macOS ⌥), Alt+PageDown / Alt+PageUp, Ctrl+Tab / Ctrl+Shift+Tab   sonraki / önceki sekme
  *   Alt+W                   etkin sekmeyi kapat (tarayıcının Ctrl+W'siyle çakışmaz)
- *   f                       odak modu aç/kapat;  Esc  odak modundan çık
+ *   f                       odak modu aç/kapat;  Esc  odak modundan çık (açık gözatma penceresi yoksa: tek Esc tek iş)
  */
 export function useTabShortcuts(): void {
   const nav = useCodeNav();
@@ -32,10 +29,10 @@ export function useTabShortcuts(): void {
       }
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
         if (typing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+        const delta = tabCycleDelta(e);
         if (e.key === 'ArrowLeft') nav.back();
         else if (e.key === 'ArrowRight') nav.forward();
-        else if (e.key === 'PageDown') cmd.cycle(1);
-        else if (e.key === 'PageUp') cmd.cycle(-1);
+        else if (delta !== 0) cmd.cycle(delta);
         else if (e.code === 'KeyW') cmd.closeActive();
         else return;
         e.preventDefault();
@@ -46,7 +43,8 @@ export function useTabShortcuts(): void {
       if (e.key === 'f') {
         e.preventDefault();
         layout.toggleFocusMode();
-      } else if (e.key === 'Escape' && layout.focusMode) {
+      } else if (e.key === 'Escape' && layout.focusMode && usePeek.getState().entries.length === 0) {
+        // Açık gözatma penceresi varsa Esc onu kapatır (usePeekKeys); odak modu ancak sonraki Esc'te kapanır.
         layout.setFocusMode(false);
       }
     };

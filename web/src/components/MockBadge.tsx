@@ -10,7 +10,7 @@ export function MockBadge() {
     <div className="mock-badge" role="status">
       <span className="mock-badge__dot" aria-hidden="true" />
       <span>
-        <strong>ÖRNEK VERİ</strong> <span className="mock-badge__sub">mock mod — sunucu kullanılmıyor</span>
+        <strong>ÖRNEK VERİ</strong> <span className="mock-badge__sub">örnek veri modu — sunucu kullanılmıyor</span>
       </span>
       <button
         type="button"

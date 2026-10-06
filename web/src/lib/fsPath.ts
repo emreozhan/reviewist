@@ -51,9 +51,13 @@ export function pathCrumbs(input: string): PathCrumb[] {
   return [{ label: p, path: p }];
 }
 
-/** Karşılaştırma anahtarı: sondaki ayırıcı atılır; Windows yolları büyük/küçük harf ve ayırıcı duyarsız. */
+/**
+ * Karşılaştırma anahtarı: sondaki ayırıcı atılır; Windows yolları büyük/küçük harf ve ayırıcı duyarsız.
+ * Unicode NFC'ye çevrilir (macOS/Finder ayrışık NFD adlar üretebilir: "Çalışmalar" iki biçimde de aynı anahtar).
+ * Yalnız karşılaştırma içindir; yolun kendisi değiştirilmeden saklanır.
+ */
 export function pathKey(p: string): string {
-  const t = p.trim();
+  const t = p.trim().normalize('NFC');
   if (isWindowsPath(t)) {
     const w = t.replace(/\//g, '\\');
     const trimmed = /^[A-Za-z]:\\$/.test(w) ? w : w.replace(/\\+$/, '');

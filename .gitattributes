@@ -1,1 +1,16 @@
+# Metin dosyaları her platformda LF ile tutulur.
 * text=auto eol=lf
+
+# İkili dosyalar
+*.wasm binary
+*.woff binary
+*.woff2 binary
+*.png binary
+
+# Hazır paket: üretilmiş çıktı (GitHub dil istatistiklerine ve diff'lere katılmaz).
+dist/** linguist-generated=true
+dist/server/*.js -diff
+dist/web/assets/*.js -diff
+dist/web/assets/*.css -diff
+package-lock.json linguist-generated=true
+vendor/** linguist-vendored=true
