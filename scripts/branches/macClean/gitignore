@@ -1,0 +1,14 @@
+# Bağımlılıklar ve derleme çıktısı (npm install sırasında üretilir)
+node_modules/
+dist/
+
+# Yerel / geçici
+fixtures/
+*.log
+*.tsbuildinfo
+.env*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.claude/

@@ -151,6 +151,7 @@ npm install
 | `npm run build` | `dist/` paketini yeniden üretir |
 | `npm run smoke` | Paketin `node_modules` olmadan çalıştığını ve kaynakla güncel olduğunu doğrular |
 | `npm run fixture` | `fixtures/sample-repo` örnek Java deposunu kurar (beklenen sonuçlar: `fixtures/EXPECTED.md`) |
+| `npm run sync-branches` | `mac` (yalnız hazır paket) ve `macClean` (yalnız kaynak) dallarını `main`'den yeniden üretir; `-- --push` ile gönderir |
 | `npm run test:perf` | Performans ölçümleri (süre eşikleriyle, tek başına) |
 
 > **Önemli:** `dist/` depoya işlenir. `src/`, `web/` ya da bağımlılıklar değiştiğinde `npm run build` çalıştırıp `dist/`

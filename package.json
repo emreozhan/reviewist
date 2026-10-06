@@ -38,7 +38,8 @@
     "test:perf": "vitest run src/core/java/perf.test.ts src/core/perf.test.ts src/core/redos.test.ts src/core/navigation.test.ts web/src/lib/perf.test.ts --no-file-parallelism",
     "typecheck": "tsc -p tsconfig.check.json && tsc -p web/tsconfig.json",
     "fixture": "node scripts/make-fixture.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "sync-branches": "node scripts/sync-branches.mjs"
   },
   "devDependencies": {
     "@dagrejs/dagre": "^3.1.1",
