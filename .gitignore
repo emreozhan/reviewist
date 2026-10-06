@@ -1,21 +1,14 @@
-# Bağımlılıklar (yalnızca geliştirme için gerekir; çalıştırmak için dist/ yeterlidir)
+# Bağımlılıklar ve derleme çıktısı (npm install sırasında üretilir)
 node_modules/
+dist/
 
-# Not: dist/ BİLEREK depoya işlenir (kurulum gerektirmeyen hazır paket). `npm run build` ile üretilir.
-
-# Üretilen örnek depo (npm run fixture)
-fixtures/sample-repo/
-
-# Günlükler, geçici ve yerel dosyalar
+# Yerel / geçici
+fixtures/
 *.log
-dump*.json
 *.tsbuildinfo
-coverage/
 .env*
 .DS_Store
 Thumbs.db
-
-# Editör / araç klasörleri
 .idea/
 .vscode/
 .claude/

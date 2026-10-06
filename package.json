@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Java odakli yerel kod inceleme araci: buyuk (AI kaynakli) degisiklikleri sembol duzeyinde cozer, etkiyi ve okuma sirasini gosterir",
+  "description": "Java odakli yerel kod inceleme araci (kaynak kod; npm install ile derlenir)",
   "license": "MIT",
   "author": "EmreOzhan",
   "keywords": [
@@ -17,28 +17,17 @@
   "bin": {
     "reviewist": "bin/reviewist.js"
   },
-  "files": [
-    "bin",
-    "dist",
-    "vendor",
-    "README.md",
-    "LICENSE"
-  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "prepare": "node scripts/build.mjs",
     "start": "node bin/reviewist.js",
     "build": "node scripts/build.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "typecheck": "tsc -p tsconfig.json && tsc -p web/tsconfig.json",
     "dev:server": "tsx watch src/server/cli.ts --no-open --port 4317",
-    "dev:web": "vite",
-    "test": "vitest run",
-    "test:server": "vitest run src/sources src/server",
-    "test:core": "vitest run src/core",
-    "test:perf": "vitest run src/core/java/perf.test.ts src/core/perf.test.ts src/core/redos.test.ts src/core/navigation.test.ts web/src/lib/perf.test.ts --no-file-parallelism",
-    "typecheck": "tsc -p tsconfig.check.json && tsc -p web/tsconfig.json",
-    "fixture": "node scripts/make-fixture.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "dev:web": "vite"
   },
   "devDependencies": {
     "@dagrejs/dagre": "^3.1.1",
@@ -63,7 +52,6 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
-    "vitest": "^5.0.3",
     "web-tree-sitter": "^0.27.0",
     "zod": "^4.6.5",
     "zustand": "^5.0.15"
