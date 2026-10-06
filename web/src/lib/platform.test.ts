@@ -77,12 +77,12 @@ describe('NFD (macOS ayrışık) dosya adları', () => {
   });
 
   it('pathKey/samePath iki biçimi aynı sayar; yol değeri değişmez', () => {
-    expect(pathKey(`/Users/emre/${nfd}`)).toBe(pathKey(`/Users/emre/${nfc}`));
+    expect(pathKey(`/Users/demo/${nfd}`)).toBe(pathKey(`/Users/demo/${nfc}`));
     expect(samePath(`C:\\${nfd}\\x`, `c:/${nfc}/x/`)).toBe(true);
   });
 
   it('son depolar listesinde NFD/NFC tekrar ayıklanır, ilk yazılan değer korunur', () => {
-    const list = pushRecentRepo([`/Users/emre/${nfc}`], `/Users/emre/${nfd}`);
-    expect(list).toEqual([`/Users/emre/${nfd}`]);
+    const list = pushRecentRepo([`/Users/demo/${nfc}`], `/Users/demo/${nfd}`);
+    expect(list).toEqual([`/Users/demo/${nfd}`]);
   });
 });

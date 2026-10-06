@@ -9,7 +9,7 @@ import type { ManagedChangeSet } from './common.js';
 import { SourceError } from './errors.js';
 import { createGithubChangeSet, parsePrUrl, parseRemoteUrl, resolveGithubToken, resolveGithubTokenFor } from './github.js';
 
-const TOKEN = 'ghp_TESTTOKEN_should_never_leak_123';
+const TOKEN = 'test-token-should-never-leak-123';
 const API = 'https://api.github.com';
 const BASE_SHA = 'b'.repeat(40);
 const HEAD_SHA = 'h'.repeat(40).replace(/h/g, 'c');
