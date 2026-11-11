@@ -1,7 +1,7 @@
-# Bağımlılıklar (yalnızca geliştirme için gerekir; çalıştırmak için dist/ yeterlidir)
+# Bağımlılıklar (yalnızca geliştirme için gerekir; çalıştırmak için local/ ya da github/ klasörü yeterlidir)
 node_modules/
 
-# Not: dist/ BİLEREK depoya işlenir (kurulum gerektirmeyen hazır paket). `npm run build` ile üretilir.
+# Not: local/dist ve github/dist BİLEREK depoya işlenir (kurulum gerektirmeyen hazır paketler). `npm run build` ile üretilir.
 
 # Üretilen örnek depo (npm run fixture)
 fixtures/sample-repo/

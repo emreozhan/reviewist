@@ -1,34 +1,40 @@
 #!/usr/bin/env node
 /**
- * Reviewist'i kurulum gerektirmeyen bir dağıtıma derler. Çıktı (`dist/`) depoya işlenir; böylece depoyu indiren
- * kişi `npm install` yapmadan, yalnızca Node ve git ile `node bin/reviewist.js` çalıştırabilir.
+ * İki uygulamayı (local/, github/) kurulum gerektirmeyen, birbirinden bağımsız dağıtımlar olarak derler. Her
+ * uygulamanın `dist/` klasörü depoya işlenir; uygulama klasörü tek başına kopyalanıp `node bin/…` ile çalıştırılabilir.
  *
- *   dist/server/cli.js              sunucu + analiz motoru + tüm npm bağımlılıkları (tek dosya)
- *   dist/server/parseWorker.js      Java ayrıştırma işçisi (worker_threads)
- *   dist/server/*.wasm              tree-sitter çalışma zamanı + Java dil bilgisi
- *   dist/web/                       arayüz (Vite)
- *   dist/THIRD-PARTY-LICENSES.txt   pakete giren üçüncü taraf yazılımların lisansları
- *   dist/BUILD.json                 sürüm + girdilerin özeti (paketin kaynakla güncel olduğunu denetlemek için)
+ *   <uygulama>/dist/server/cli.js           sunucu + analiz motoru + tüm npm bağımlılıkları (tek dosya)
+ *   <uygulama>/dist/server/parseWorker.js   Java ayrıştırma işçisi (worker_threads)
+ *   <uygulama>/dist/server/*.wasm           tree-sitter çalışma zamanı + Java dil bilgisi
+ *   <uygulama>/dist/web/                    arayüz (Vite; uygulamaya özel derlenir)
+ *   <uygulama>/dist/THIRD-PARTY-LICENSES.txt
+ *   <uygulama>/dist/BUILD.json              sürüm, girdilerin özeti, pakete giren kütüphaneler
  *
- * Kullanım: `npm run build` (geliştirme bağımlılıkları kurulu olmalı).
+ * Derleme, paket denetiminden (scripts/lib/bundleAudit.mjs) geçemezse durur: izin listesinde olmayan bir kütüphane,
+ * yeni bir ağ yeteneği ya da yerel uygulamada herhangi bir dış istek kodu bulunursa çıktı yazılmaz.
+ *
+ * Kullanım: `npm run build` (ikisi) · `node scripts/build.mjs local` · `node scripts/build.mjs github`
  */
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build as esbuild } from 'esbuild';
 import { build as viteBuild } from 'vite';
+import { auditServerBundle, auditWebBundle } from './lib/bundleAudit.mjs';
 import { sourceHash } from './lib/sourceHash.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const dist = join(root, 'dist');
-const serverOut = join(dist, 'server');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const EDITIONS = ['local', 'github'];
+const wanted = process.argv.slice(2).filter((a) => !a.startsWith('-'));
+const editions = wanted.length ? wanted : EDITIONS;
+for (const e of editions) if (!EDITIONS.includes(e)) throw new Error(`Bilinmeyen uygulama: ${e} (local | github)`);
 
-/** Yalnızca depo kökündeki `dist` klasörü silinir. */
-function cleanDist() {
-  if (dirname(dist) !== root || !dist.endsWith(`${sep}dist`)) throw new Error(`Beklenmeyen dist yolu: ${dist}`);
+/** Yalnızca `<uygulama>/dist` klasörü silinir. */
+function cleanDist(dist) {
+  if (!EDITIONS.some((e) => dist === join(root, e, 'dist')) || !dist.endsWith(`${sep}dist`)) throw new Error(`Beklenmeyen dist yolu: ${dist}`);
   rmSync(dist, { recursive: true, force: true });
-  mkdirSync(serverOut, { recursive: true });
+  mkdirSync(join(dist, 'server'), { recursive: true });
 }
 
 /** node_modules içindeki bir dosya yolundan paket kökünü bulur (iç içe node_modules dahil). */
@@ -51,19 +57,19 @@ function licenseTextOf(dir) {
     .join('\n\n');
 }
 
-async function buildWeb() {
-  const result = await viteBuild({ configFile: join(root, 'vite.config.ts'), logLevel: 'warn' });
+async function buildWeb(edition) {
+  const result = await viteBuild({ configFile: join(root, 'vite.config.ts'), mode: edition === 'github' ? 'github' : 'production', logLevel: 'warn' });
   const outputs = (Array.isArray(result) ? result : [result]).flatMap((r) => r.output ?? []);
   const ids = new Set();
   for (const chunk of outputs) for (const id of chunk.moduleIds ?? Object.keys(chunk.modules ?? {})) ids.add(id);
   return [...ids];
 }
 
-async function buildServer() {
+async function buildServer(edition, outdir) {
   const result = await esbuild({
     absWorkingDir: root,
-    entryPoints: { cli: 'src/server/cli.ts', parseWorker: 'src/core/java/parseWorker.ts' },
-    outdir: serverOut,
+    entryPoints: { cli: `${edition}/src/cli.ts`, parseWorker: 'shared/src/core/java/parseWorker.ts' },
+    outdir,
     bundle: true,
     platform: 'node',
     format: 'esm',
@@ -72,18 +78,19 @@ async function buildServer() {
     charset: 'utf8',
     metafile: true,
     logLevel: 'warning',
+    define: { __REVIEWIST_VERSION__: JSON.stringify(pkg.version) },
     // CommonJS bağımlılıkların `require(...)` çağrıları ESM pakette çalışsın.
     banner: {
       js: "import { createRequire as __reviewistCreateRequire } from 'node:module';\nconst require = __reviewistCreateRequire(import.meta.url);",
     },
   });
-  return Object.keys(result.metafile.inputs).map((p) => join(root, p));
+  return Object.keys(result.metafile.inputs);
 }
 
-function copyWasm() {
+function copyWasm(serverOut) {
   const files = [
     [join(root, 'node_modules/web-tree-sitter/web-tree-sitter.wasm'), 'web-tree-sitter.wasm'],
-    [join(root, 'vendor/tree-sitter-java/tree-sitter-java.wasm'), 'tree-sitter-java.wasm'],
+    [join(root, 'shared/vendor/tree-sitter-java/tree-sitter-java.wasm'), 'tree-sitter-java.wasm'],
   ];
   for (const [from, name] of files) {
     if (!existsSync(from)) throw new Error(`WebAssembly dosyası bulunamadı: ${relative(root, from)}`);
@@ -91,7 +98,7 @@ function copyWasm() {
   }
 }
 
-function writeLicenses(moduleFiles) {
+function writeLicenses(dist, moduleFiles) {
   const packages = new Map();
   for (const file of moduleFiles) {
     const p = packageRootOf(file);
@@ -108,19 +115,18 @@ function writeLicenses(moduleFiles) {
       const license = typeof meta.license === 'string' ? meta.license : (meta.license?.type ?? 'bilinmiyor');
       return { name, version: meta.version, license, text: licenseTextOf(dir) };
     })
-    .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+    .sort((a, b) => a.name.localeCompare(b.name, 'en') || a.version.localeCompare(b.version, 'en'));
 
-  const vendorJava = readFileSync(join(root, 'vendor/tree-sitter-java/LICENSE'), 'utf8').replace(/\r\n/g, '\n').trim();
+  const vendorJava = readFileSync(join(root, 'shared/vendor/tree-sitter-java/LICENSE'), 'utf8').replace(/\r\n/g, '\n').trim();
+  const bar = '='.repeat(78);
   const sections = [
-    'Reviewist dağıtımı (dist/) aşağıdaki üçüncü taraf yazılımları içerir. Her biri kendi lisansıyla dağıtılır.',
-    `Bu dosya \`npm run build\` ile üretilir; elle düzenlemeyin.`,
-    `${'='.repeat(78)}\ntree-sitter-java (vendor/tree-sitter-java, WebAssembly dil bilgisi) — MIT\n${'='.repeat(78)}\n${vendorJava}`,
-    ...entries.map(
-      (e) => `${'='.repeat(78)}\n${e.name}@${e.version} — ${e.license}\n${'='.repeat(78)}\n${e.text || '(pakette lisans dosyası yok; lisans alanı: ' + e.license + ')'}`,
-    ),
+    'Bu dağıtım (dist/) aşağıdaki üçüncü taraf yazılımları içerir. Her biri kendi lisansıyla dağıtılır.',
+    'Bu dosya `npm run build` ile üretilir; elle düzenlemeyin.',
+    `${bar}\ntree-sitter-java (WebAssembly dil bilgisi) — MIT\n${bar}\n${vendorJava}`,
+    ...entries.map((e) => `${bar}\n${e.name}@${e.version} — ${e.license}\n${bar}\n${e.text || `(pakette lisans dosyası yok; lisans alanı: ${e.license})`}`),
   ];
   writeFileSync(join(dist, 'THIRD-PARTY-LICENSES.txt'), `${sections.join('\n\n')}\n`);
-  return entries;
+  return entries.length;
 }
 
 function sizeOf(dir) {
@@ -140,15 +146,37 @@ function sizeOf(dir) {
   return { total, count };
 }
 
-const t0 = Date.now();
-cleanDist();
-const webModules = await buildWeb();
-const serverModules = await buildServer();
-copyWasm();
-const licensed = writeLicenses([...webModules, ...serverModules]);
-writeFileSync(join(dist, 'BUILD.json'), `${JSON.stringify({ version: pkg.version, sourceHash: sourceHash(root) }, null, 2)}\n`);
-const { total, count } = sizeOf(dist);
-console.log(
-  `Reviewist ${pkg.version} derlendi: dist/ ${count} dosya, ${(total / 1024 / 1024).toFixed(1)} MB, ` +
-    `${licensed.length} üçüncü taraf paket, ${((Date.now() - t0) / 1000).toFixed(1)} sn`,
-);
+const hash = sourceHash(root);
+let failed = false;
+for (const edition of editions) {
+  const t0 = Date.now();
+  const dist = join(root, edition, 'dist');
+  const serverOut = join(dist, 'server');
+  cleanDist(dist);
+  const webModules = await buildWeb(edition);
+  const serverInputs = await buildServer(edition, serverOut);
+
+  const server = auditServerBundle(root, edition, serverInputs);
+  const problems = [...server.problems, ...auditWebBundle(join(dist, 'web'), edition)];
+  if (problems.length > 0) {
+    failed = true;
+    rmSync(dist, { recursive: true, force: true });
+    console.error(`\nPAKET DENETİMİ BAŞARISIZ (${edition}) — çıktı yazılmadı:`);
+    for (const p of problems) console.error(`  ✗ ${p}`);
+    console.error('  Beklenen bir değişiklikse scripts/lib/bundleAudit.mjs içindeki izin listesini bilinçli olarak güncelleyin.\n');
+    continue;
+  }
+
+  copyWasm(serverOut);
+  const licensed = writeLicenses(dist, [...webModules, ...serverInputs.map((p) => join(root, p))]);
+  writeFileSync(
+    join(dist, 'BUILD.json'),
+    `${JSON.stringify({ app: `reviewist-${edition}`, version: pkg.version, sourceHash: hash, serverPackages: server.packages }, null, 2)}\n`,
+  );
+  const { total, count } = sizeOf(dist);
+  console.log(
+    `reviewist-${edition} ${pkg.version} derlendi: ${edition}/dist ${count} dosya, ${(total / 1024 / 1024).toFixed(1)} MB; ` +
+      `sunucuya gömülü kütüphaneler: ${server.packages.map((p) => p.name).join(', ')}; ${licensed} lisans; ${((Date.now() - t0) / 1000).toFixed(1)} sn`,
+  );
+}
+if (failed) process.exit(1);

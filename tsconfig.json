@@ -8,20 +8,21 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "rootDir": "src",
+    "rootDir": ".",
     "types": [
       "node"
     ],
     "noEmit": true
   },
   "include": [
-    "src/**/*.ts"
+    "shared/src/**/*.ts",
+    "local/src/**/*.ts",
+    "github/src/**/*.ts"
   ],
   "exclude": [
-    "src/**/*.test.ts",
-    "src/core/testing/**",
+    "**/*.test.ts",
+    "shared/src/core/testing/**",
     "node_modules",
-    "dist",
-    "web"
+    "**/dist"
   ]
 }

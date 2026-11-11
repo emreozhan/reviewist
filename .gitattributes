@@ -7,10 +7,11 @@
 *.woff2 binary
 *.png binary
 
-# Hazır paket: üretilmiş çıktı (GitHub dil istatistiklerine ve diff'lere katılmaz).
-dist/** linguist-generated=true
-dist/server/*.js -diff
-dist/web/assets/*.js -diff
-dist/web/assets/*.css -diff
+# Hazır paketler: üretilmiş çıktı (GitHub dil istatistiklerine ve diff'lere katılmaz).
+local/dist/** linguist-generated=true
+github/dist/** linguist-generated=true
+*/dist/server/*.js -diff
+*/dist/web/assets/*.js -diff
+*/dist/web/assets/*.css -diff
 package-lock.json linguist-generated=true
-vendor/** linguist-vendored=true
+shared/vendor/** linguist-vendored=true

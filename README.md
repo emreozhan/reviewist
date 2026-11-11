@@ -1,11 +1,10 @@
 # Reviewist
 
-Java ağırlıklı büyük değişiklikleri (özellikle AI ile üretilmiş olanları) incelemeyi kolaylaştıran, **tamamen yerelde
-çalışan** kod inceleme aracı.
+Java ağırlıklı büyük değişiklikleri (özellikle AI ile üretilmiş olanları) incelemeyi kolaylaştıran, **kendi
+makinenizde çalışan** kod inceleme aracı.
 
-Satır satır diff "bu değişiklik nereye gidiyor?" sorusuna cevap vermez. Reviewist bir git aralığını, commit edilmemiş
-çalışma ağacını, bir GitHub PR'ını ya da yapıştırılmış bir patch'i alır; Java kodunu **sembol düzeyinde** (tip, metot,
-alan) çözer ve tarayıcıda şunları gösterir:
+Satır satır diff "bu değişiklik nereye gidiyor?" sorusuna cevap vermez. Reviewist değişikliği alır, Java kodunu
+**sembol düzeyinde** (tip, metot, alan) çözer ve tarayıcıda şunları gösterir:
 
 - **Semantik diff** — her üye için durum: eklendi, silindi, gövdesi değişti, imzası değişti, yeniden adlandırıldı,
   başka sınıfa taşındı ya da yalnızca biçimi değişti. Ayrıntılar somut: "parametre eklendi: String idempotencyKey",
@@ -21,10 +20,19 @@ alan) çözer ve tarayıcıda şunları gösterir:
   üstüne basamaklanır. İstenirse IDE tarzı sekmelerde de açılır. Etki haritası, değişiklik grupları, görüldü
   işaretleri, notlar ve Markdown dışa aktarma da vardır.
 
-## Hızlı başlangıç (kurulum yok)
+## İki bağımsız uygulama
 
-Gereken tek şey **Node.js 20+** ve **git**. Depo, derlenmiş hazır paketi (`dist/`) içerir; `npm install` gerekmez ve
-çalışırken internete ihtiyaç duyulmaz.
+Depo, birbirinden bağımsız dağıtılabilen iki uygulama içerir. Her biri kendi klasöründe, **kurulum gerektirmeyen hazır
+paketiyle** (`dist/`) durur; klasörü tek başına kopyalayıp çalıştırabilirsiniz. Gereken tek şey **Node.js 20+** ve
+**git**; `npm install` gerekmez.
+
+| | [Reviewist Yerel](local/README.md) (`local/`) | [Reviewist GitHub](github/README.md) (`github/`) |
+| --- | --- | --- |
+| Ne inceler | Bu makinedeki bir git deposu: iki dal/commit arası, commitlenmemiş çalışma ağacı, yapıştırılan patch | Uzak depo: GitHub PR'ı ya da bir deponun iki dalı |
+| Kodu nasıl alır | Depoyu yerinde okur | `git clone` / `git fetch` ile yerel önbelleğe getirir |
+| Ağ | **Hiç yok.** Uygulamada dış istek kodu bulunmaz; süreç içi çıkış bekçisi ve `git` için ağ kapalıdır | `git` uzak depoya bağlanır; uygulama yalnız PR başlığı/taban dalı için **tek** GitHub API isteği yapar |
+| Başlat | `node local/bin/reviewist-local.js` | `node github/bin/reviewist-github.js` |
+| Varsayılan adres | `http://127.0.0.1:4317` | `http://127.0.0.1:4318` |
 
 ```bash
 git clone <depo-adresi> reviewist
@@ -34,80 +42,67 @@ git clone <depo-adresi> reviewist
 cd reviewist
 ```
 
-Her şeyin bu makinede çalıştığını doğrulayan öz-denetim (isteğe bağlı, ~5 sn):
+Her iki paketin bu makinede çalıştığını doğrulayan öz-denetim (isteğe bağlı, ~10 sn, ağa çıkmaz):
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Başlat:
+Yerel depo incelemek için:
 
 ```bash
-node bin/reviewist.js
+node local/bin/reviewist-local.js
 ```
 
-Tarayıcıda `http://127.0.0.1:4317` açılır; depo klasörünü **Gözat…** ile, dalları açılır listeden seçip **Analiz et**'e
-basın. Komut satırından doğrudan da başlatılabilir:
+Uzak depo / PR incelemek için:
 
 ```bash
-node bin/reviewist.js /yol/depo --base main --head feature/x
+node github/bin/reviewist-github.js
 ```
 
-```bash
-node bin/reviewist.js /yol/depo --worktree
-```
-
-```bash
-node bin/reviewist.js --pr https://github.com/sahip/depo/pull/123
-```
-
-Tüm seçenekler: `node bin/reviewist.js --help`
+Yalnız birini dağıtmak isterseniz ilgili klasörü (`local/` ya da `github/`) kopyalamanız yeterlidir; diğer klasöre,
+`shared/` kaynaklarına ya da `node_modules`'a ihtiyaç duymaz.
 
 ### macOS notları
 
 - git yoksa: `xcode-select --install` (ya da Homebrew `brew install git`).
 - Uygulama bir simge/başlatıcı üzerinden açıldığında PATH kısıtlı olabilir; Reviewist git'i bilinen kurulum yerlerinde de
-  arar. Gerekirse yolu elle verin: `REVIEWIST_GIT=/opt/homebrew/bin/git node bin/reviewist.js`
+  arar. Gerekirse yolu elle verin: `REVIEWIST_GIT=/opt/homebrew/bin/git node local/bin/reviewist-local.js`
 - Belgeler / Masaüstü / İndirilenler altındaki depolar için macOS, terminal uygulamasına klasör erişim izni sorabilir.
 - Koddaki bağlantılarda `Ctrl+tık` yerine `⌘+tık` kullanılır.
 
-## Ağ ve gizlilik
+## Güvenlik ve gizlilik
 
-| Mod | İnternet gerekir mi |
-| --- | --- |
-| Yerel git aralığı (`--base` / `--head`) | Hayır |
-| Çalışma ağacı (`--worktree`) | Hayır |
-| Patch yapıştırma | Hayır |
-| GitHub PR (yalnız adresle) | Evet — PR bilgisi, dosya listesi ve içerikler `api.github.com` (ya da GitHub Enterprise) üzerinden; depo arşivi `codeload.github.com`'dan |
-| GitHub PR + yerel klon | PR bilgisi API'den alınır, sonra PR yerel klona `git fetch` ile getirilir ve analiz yerelde yapılır |
+Kodunuzun makineden çıkmaması tasarımın merkezindedir ve üç bağımsız katmanla korunur:
 
-- Sunucu yalnızca `127.0.0.1` üzerinde dinler; başka sitelerden ve başka makinelerden gelen istekleri reddeder. Aynı
-  makinedeki diğer kullanıcı hesapları için kimlik doğrulaması yoktur; paylaşılan bir makinede sunucuyu açık bırakmayın.
-- Arayüzün tüm dosyaları (yazı tipleri dahil) yerel sunucudan gelir; CDN, analitik ya da telemetri yoktur.
-- Kodunuz makinenizden çıkmaz. Yapay zekâ servisi çağrısı yoktur; analiz kural tabanlıdır.
+1. **Derleme zamanı — paket denetimi.** `npm run build`, pakete giren her kütüphaneyi ve içindeki ağ/süreç
+   yeteneklerini bir izin listesiyle karşılaştırır ([scripts/lib/bundleAudit.mjs](scripts/lib/bundleAudit.mjs)).
+   Listede olmayan bir kütüphane, bir kütüphanede yeni beliren bir yetenek (ör. bir güncellemeyle gelen `fetch`), yerel
+   uygulamada herhangi bir dış istek kodu ya da arayüzde yasak bir tarayıcı API'si (WebSocket, `sendBeacon`, `eval`…)
+   bulunursa derleme durur ve paket yazılmaz. Pakete giren kütüphaneler sürümleriyle `dist/BUILD.json` içindedir.
+2. **Çalışma zamanı — çıkış bekçisi.** Sunucu süreci ve ayrıştırma işçileri açılışta Node'un ağ katmanını yamalar
+   ([shared/src/runtime/egressGuard.ts](shared/src/runtime/egressGuard.ts)): `127.0.0.1` dışındaki her TCP bağlantısı,
+   DNS sorgusu ve UDP gönderimi engellenir. Yerel uygulamada izin listesi boştur; GitHub uygulamasında yalnız GitHub
+   API sunucularına (`api.github.com` + `REVIEWIST_GITHUB_HOSTS`) izin verilir. Yerel uygulama ayrıca `git`'i tüm
+   taşıyıcılar kapalı (`protocol.allow=never`) çalıştırır.
+3. **Tarayıcı — içerik güvenlik politikası.** Her yanıt `Content-Security-Policy: default-src 'none'; connect-src
+   'self'; script-src 'self'; …` başlığıyla gelir: sayfa yalnız kendi yerel sunucusuna bağlanabilir, dış betik/resim/
+   yazı tipi yükleyemez, satır içi betik çalıştıramaz, başka sayfaya gömülemez.
+
+Ek olarak:
+
+- Sunucu yalnızca `127.0.0.1` üzerinde dinler; başka sitelerden ve başka makinelerden gelen istekleri reddeder (Host,
+  Origin ve `Sec-Fetch-Site` denetimleri). Aynı makinedeki diğer kullanıcı hesapları için kimlik doğrulaması yoktur;
+  paylaşılan bir makinede sunucuyu açık bırakmayın.
+- Arayüzün tüm dosyaları (yazı tipleri dahil) yerel sunucudan gelir; CDN, analitik ya da telemetri yoktur. Yapay zekâ
+  servisi çağrısı yoktur; analiz kural tabanlıdır.
 - İncelenen depo güvenilmez olabilir: git, depodaki hook'lar ve `fsmonitor` kapalı olarak çalıştırılır, sembolik bağlar
   izlenmez, `git` her zaman tam yoluyla çağrılır (depoya konmuş sahte bir `git.exe` çalışmaz).
-- GitHub token'ı `GITHUB_TOKEN` / `GH_TOKEN` (ya da `--token-env AD`) ortam değişkeninden okunur ya da formda girilir;
-  diske yazılmaz. Ortam değişkenindeki token **yalnızca `github.com`'a** gönderilir; GitHub Enterprise sunucuları için
-  `REVIEWIST_GITHUB_HOSTS` ile izin verin ya da token'ı formda girin. `http://` adresler kabul edilmez.
+- Çalışma zamanında **npm bağımlılığı yoktur**; paketler kurulum betiği çalıştırmaz.
 
-### Ortam değişkenleri
-
-| Değişken | Ne yapar |
-| --- | --- |
-| `GITHUB_TOKEN`, `GH_TOKEN` | GitHub PR modunda kullanılacak token (özel depolar ve saatlik istek sınırı için) |
-| `REVIEWIST_GITHUB_HOSTS` | Ortam token'ının gönderilebileceği ek sunucular, virgülle ayrılmış (`git.sirket.com`) |
-| `REVIEWIST_GIT` | git çalıştırılabilir dosyasının tam yolu (PATH'te bulunamıyorsa; Windows ve macOS) |
-| `REVIEWIST_PERF` | `1` ise performans testlerindeki süre sınırları uygulanır |
-
-### Yan etkiler
-
-- GitHub PR + yerel klon modu, klona `refs/reviewist/pr-<n>` (gerekirse `…-base`) ref'lerini yazar; silmek için
-  `git update-ref -d refs/reviewist/pr-<n>`.
-- GitHub PR adres modunda depo arşivi geçici klasöre (`reviewist-gh-*`) açılır ve inceleme silinince ya da sunucu
-  kapanınca temizlenir; bir günden eski kalıntılar bir sonraki açılışta süpürülür.
-- İncelemeler yalnız bellekte tutulur (en çok 20); sunucu kapanınca gider. Görüldü işaretleri, notlar ve sekmeler
-  tarayıcının `localStorage`'ında kalır.
+> Bu katmanlar kazara ya da bir bağımlılık güncellemesiyle gelen veri sızıntısına karşıdır. Sürecin içinde kasıtlı ve
+> gizlenmiş kötü amaçlı kodu durdurmayı garanti etmezler; en güçlü önlem işletim sistemi güvenlik duvarında `node`
+> için giden bağlantıları kısıtlamaktır (yerel uygulama için tamamen kapatılabilir).
 
 ## Kullanım ipuçları
 
@@ -123,6 +118,7 @@ Tüm seçenekler: `node bin/reviewist.js --help`
 | `?` | Tüm kısayollar |
 
 Panellerin arasındaki ayraçlar sürüklenebilir; görüldü işaretleri, notlar ve açık sekmeler tarayıcıda saklanır.
+İncelemeler yalnız bellekte tutulur (en çok 20); sunucu kapanınca gider.
 
 ## Bilinen sınırlar
 
@@ -130,10 +126,7 @@ Panellerin arasındaki ayraçlar sürüklenebilir; görüldü işaretleri, notla
 - Çağıran ve aşırı yükleme (overload) çözümü derleyici değil, sezgiseldir; kesin eşleşmeler "olası" olanlardan ayrı
   işaretlenir. Test ve hexagonal mimari tespiti yol/paket adlarına dayanır.
 - Repo indeksi en çok 5000 `.java` dosyasını kapsar; çok büyük etki grafikleri en riskli 600 düğümle sınırlanır.
-- GitHub adres modu: en çok 3000 değişen dosya, 200 MB arşiv; token'sız saatte 60 istek.
-- Çalışma ağacı modu: en çok 2000 izlenmeyen dosya, dosya başına 5 MB.
-- Patch modu: depo yolu verilirse klasör yamanın uygulanmış ya da uygulanmamış hâli olabilir; her ikisi de çözülür.
-  Depo yolu yoksa yalnız yamadaki satırlar analiz edilir (çağıran bilgisi yok).
+- Uygulamaya özel sınırlar: [local/README.md](local/README.md), [github/README.md](github/README.md).
 
 ## Geliştirme
 
@@ -143,47 +136,68 @@ Geliştirme bağımlılıkları yalnızca kaynak kodu değiştirmek için gereki
 npm install
 ```
 
+### Depo yapısı
+
+```
+shared/            iki uygulamanın ortak kaynağı (tek başına çalışmaz; derlemede her uygulamaya gömülür)
+  src/core/        analiz motoru: tree-sitter Java, semantik diff, repo indeksi, risk, okuma planı
+  src/sources/     yerel kaynaklar: git aralığı, çalışma ağacı, patch
+  src/server/      Hono sunucusu (/api), güvenlik başlıkları, ortak başlatıcı (runServer)
+  src/runtime/     çıkış bekçisi
+  src/shared/      ortak veri modeli ve API tipleri (types.ts)
+  web/             React arayüzü (uygulamaya göre derlenir: __EDITION__)
+  vendor/          tree-sitter-java (wasm)
+local/             Reviewist Yerel
+  src/             komut satırı (ağ kodu içermez)
+  bin/ dist/       çalıştırılabilir hazır paket (depoya işlenir)
+github/            Reviewist GitHub
+  src/             komut satırı + uzak depo kaynağı (git clone/fetch, PR bilgisi, önbellek)
+  bin/ dist/       çalıştırılabilir hazır paket (depoya işlenir)
+scripts/           build, paket denetimi, öz-denetim, fikstür
+```
+
+```
+ReviewRequest → kaynak (yerel: shared/src/sources · uzak: github/src) → ChangeSet
+ChangeSet     → shared/src/core   → ReviewModel
+ReviewModel   → shared/src/server → shared/web
+```
+
+Mimari ve API özeti: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · gerçek depolarda doğruluk ölçümü (tarihsel kayıt):
+[docs/QA-tur1.md](docs/QA-tur1.md)
+
+### Komutlar
+
 | Komut | Ne yapar |
 | --- | --- |
-| `npm run dev:server` + `npm run dev:web` | Sunucu (4317) ve Vite arayüzü (5173); `?mock=1` ile sunucusuz örnek veri |
+| `npm start` · `npm run start:github` | Hazır paketi çalıştırır: yerel uygulama (`start`, `start:local` ile aynı) · GitHub uygulaması |
+| `npm run dev:local` + `npm run dev:web` | Yerel uygulama: sunucu (4317) ve Vite arayüzü (5173); `?mock=1` ile sunucusuz örnek veri |
+| `npm run dev:github` + `npm run dev:web:github` | GitHub uygulaması: sunucu (4318) ve Vite arayüzü (5173) |
 | `npm test` | Tüm testler (Vitest). PATH'te git ≥ 2.32 gerekir; fikstür deposu yoksa kendisi üretir |
 | `npm run typecheck` | Sunucu ve arayüz tip denetimi |
-| `npm run build` | `dist/` paketini yeniden üretir |
-| `npm run smoke` | Paketin `node_modules` olmadan çalıştığını ve kaynakla güncel olduğunu doğrular |
+| `npm run build` | İki paketi (`local/dist`, `github/dist`) yeniden üretir; `build:local` / `build:github` tek tek |
+| `npm run smoke` | Paketlerin tek başına (`node_modules` olmadan) çalıştığını ve kaynakla güncel olduğunu doğrular |
 | `npm run fixture` | `fixtures/sample-repo` örnek Java deposunu kurar (beklenen sonuçlar: `fixtures/EXPECTED.md`) |
-| `npm run sync-branches` | `mac` (yalnız hazır paket) ve `macClean` (yalnız kaynak) dallarını `main`'den yeniden üretir; `-- --push` ile gönderir |
 | `npm run test:perf` | Performans ölçümleri (süre eşikleriyle, tek başına) |
 
-> **Önemli:** `dist/` depoya işlenir. `src/`, `web/` ya da bağımlılıklar değiştiğinde `npm run build` çalıştırıp `dist/`
-> klasörünü de commit edin; `npm run smoke` güncel olmayan paketi yakalar.
-
-### Yapı
-
-```
-ReviewRequest → src/sources (git | çalışma ağacı | github | patch) → ChangeSet
-ChangeSet     → src/core    (tree-sitter Java, semantik diff, repo indeksi, risk, plan) → ReviewModel
-ReviewModel   → src/server  (Hono, /api) → web/ (React)
-```
-
-- Ortak veri modeli ve API uçları: `src/shared/types.ts`
-- Mimari ve API özeti: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · gerçek depolarda doğruluk ölçümü (tarihsel kayıt):
-  [docs/QA-tur1.md](docs/QA-tur1.md)
+> **Önemli:** `local/dist` ve `github/dist` depoya işlenir. `shared/`, `local/src`, `github/src` ya da bağımlılıklar
+> değiştiğinde `npm run build` çalıştırıp iki `dist/` klasörünü de commit edin; `npm run smoke` güncel olmayan paketi
+> yakalar.
 
 ### Dış paketler
 
-Çalışma zamanında **npm bağımlılığı yoktur**: aşağıdakilerin hepsi `dist/` içine gömülüdür, kurulumda betik
-çalıştırmaz ve ağa çıkmaz.
+Aşağıdakilerin hepsi derlemede paketlerin içine gömülür; çalışma zamanında kurulmaz ve ağa çıkmaz.
 
 | Paket | Ne için |
 | --- | --- |
 | `hono`, `@hono/node-server` | Yerel HTTP sunucusu |
-| `web-tree-sitter` + `vendor/tree-sitter-java` (wasm) | Java kaynağını sözdizim ağacına çevirme |
+| `web-tree-sitter` + `shared/vendor/tree-sitter-java` (wasm) | Java kaynağını sözdizim ağacına çevirme |
 | `diff` | Satır farkı ve patch uygulama |
 | `zod` | API isteklerinin doğrulanması |
-| `tar` | GitHub tarball'ından dosya çıkarma (yalnız PR adres modunda) |
 | `react`, `@tanstack/react-query`, `zustand`, `@xyflow/react`, `@dagrejs/dagre`, `highlight.js`, `@fontsource/*` | Arayüz |
 
-Gömülü yazılımların lisansları: [dist/THIRD-PARTY-LICENSES.txt](dist/THIRD-PARTY-LICENSES.txt)
+Yeni bir kütüphane eklemek ya da birini güncellemek paket denetimindeki izin listesini bilinçli olarak güncellemeyi
+gerektirir. Gömülü yazılımların lisansları: [local/dist/THIRD-PARTY-LICENSES.txt](local/dist/THIRD-PARTY-LICENSES.txt),
+[github/dist/THIRD-PARTY-LICENSES.txt](github/dist/THIRD-PARTY-LICENSES.txt)
 
 ## Lisans
 

@@ -1,0 +1,27 @@
+{
+  "app": "reviewist-github",
+  "version": "0.1.0",
+  "sourceHash": "da87f8cd22454e83d5a739de87999c50f381134178d5a8ceca97d57719ed7878",
+  "serverPackages": [
+    {
+      "name": "@hono/node-server",
+      "version": "2.1.3"
+    },
+    {
+      "name": "diff",
+      "version": "9.0.0"
+    },
+    {
+      "name": "hono",
+      "version": "4.13.12"
+    },
+    {
+      "name": "web-tree-sitter",
+      "version": "0.27.0"
+    },
+    {
+      "name": "zod",
+      "version": "4.6.5"
+    }
+  ]
+}

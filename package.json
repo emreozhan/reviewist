@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Java odakli yerel kod inceleme araci: buyuk (AI kaynakli) degisiklikleri sembol duzeyinde cozer, etkiyi ve okuma sirasini gosterir",
+  "description": "Java odakli yerel kod inceleme araci (iki bagimsiz uygulama: local/ ve github/) - gelistirme calisma alani",
   "license": "MIT",
   "author": "EmreOzhan",
   "keywords": [
@@ -14,32 +14,27 @@
     "tree-sitter",
     "pull-request"
   ],
-  "bin": {
-    "reviewist": "bin/reviewist.js"
-  },
-  "files": [
-    "bin",
-    "dist",
-    "vendor",
-    "README.md",
-    "LICENSE"
-  ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "start": "node bin/reviewist.js",
     "build": "node scripts/build.mjs",
-    "dev:server": "tsx watch src/server/cli.ts --no-open --port 4317",
+    "build:local": "node scripts/build.mjs local",
+    "build:github": "node scripts/build.mjs github",
+    "start": "node local/bin/reviewist-local.js",
+    "start:local": "node local/bin/reviewist-local.js",
+    "start:github": "node github/bin/reviewist-github.js",
+    "dev:local": "tsx watch local/src/cli.ts --no-open --port 4317",
+    "dev:github": "tsx watch github/src/cli.ts --no-open --port 4318",
     "dev:web": "vite",
+    "dev:web:github": "vite --mode github",
     "test": "vitest run",
-    "test:server": "vitest run src/sources src/server",
-    "test:core": "vitest run src/core",
-    "test:perf": "vitest run src/core/java/perf.test.ts src/core/perf.test.ts src/core/redos.test.ts src/core/navigation.test.ts web/src/lib/perf.test.ts --no-file-parallelism",
-    "typecheck": "tsc -p tsconfig.check.json && tsc -p web/tsconfig.json",
+    "test:server": "vitest run shared/src/sources shared/src/server shared/src/runtime local/src github/src",
+    "test:core": "vitest run shared/src/core",
+    "test:perf": "vitest run shared/src/core/java/perf.test.ts shared/src/core/perf.test.ts shared/src/core/redos.test.ts shared/src/core/navigation.test.ts shared/web/src/lib/perf.test.ts --no-file-parallelism",
+    "typecheck": "tsc -p tsconfig.check.json && tsc -p shared/web/tsconfig.json",
     "fixture": "node scripts/make-fixture.mjs",
-    "smoke": "node scripts/smoke.mjs",
-    "sync-branches": "node scripts/sync-branches.mjs"
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "@dagrejs/dagre": "^3.1.1",
@@ -60,7 +55,6 @@
     "hono": "^4.13.12",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "tar": "^7.5.22",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.2",
