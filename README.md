@@ -1,204 +1,211 @@
 # Reviewist
 
-Java ağırlıklı büyük değişiklikleri (özellikle AI ile üretilmiş olanları) incelemeyi kolaylaştıran, **kendi
-makinenizde çalışan** kod inceleme aracı.
+A code review tool that **runs on your own machine** and makes large, Java-heavy changes (especially AI-generated
+ones) easier to review.
 
-Satır satır diff "bu değişiklik nereye gidiyor?" sorusuna cevap vermez. Reviewist değişikliği alır, Java kodunu
-**sembol düzeyinde** (tip, metot, alan) çözer ve tarayıcıda şunları gösterir:
+A line-by-line diff does not answer "where does this change go?". Reviewist takes the change, resolves the Java code
+at **symbol level** (type, method, field) and shows in the browser:
 
-- **Semantik diff** — her üye için durum: eklendi, silindi, gövdesi değişti, imzası değişti, yeniden adlandırıldı,
-  başka sınıfa taşındı ya da yalnızca biçimi değişti. Ayrıntılar somut: "parametre eklendi: String idempotencyKey",
-  "@Transactional eklendi", "karmaşıklık 3 → 7".
-- **Yayılım** — değişen metodu override eden alt sınıflar, arayüz implementasyonları, çağıranlar (diff içinde ve
-  **diff dışında**) ve çağrılanlar.
-- **Okuma planı** — önce sözleşmeler (arayüz, soyut sınıf, domain modeli), sonra bağımlılık sırasıyla implementasyonlar;
-  her dosyanın testi hemen arkasında; yalnızca biçimi değişen dosyalar sonda.
-- **Risk** — public API değişikliği, silinmiş ama hâlâ çağrılan üye, şablon metot değişikliği, anlam taşıyan
-  anotasyonlar, equals/hashCode, boş catch, eşzamanlılık… Her neden puanıyla gösterilir.
-- **Mimari ve test denetimi** — hexagonal mimari ihlalleri; değişen sınıfın testi var mı, güncellenmiş mi.
-- **Akışı takip** — koddaki bir çağrıya tıklayınca hedef kod önde bir pencerede açılır; pencere içinden açılan yenisi
-  üstüne basamaklanır. İstenirse IDE tarzı sekmelerde de açılır. Etki haritası, değişiklik grupları, görüldü
-  işaretleri, notlar ve Markdown dışa aktarma da vardır.
+- **Semantic diff** — a status for every member: added, removed, body changed, signature changed, renamed, moved to
+  another class, or formatting only. Details are concrete: "parameter added: String idempotencyKey",
+  "@Transactional added", "complexity 3 → 7".
+- **Propagation** — subclasses overriding the changed method, interface implementations, callers (inside and
+  **outside the diff**) and callees.
+- **Reading plan** — contracts first (interfaces, abstract classes, domain model), then implementations in dependency
+  order; each file's test right after it; formatting-only files last.
+- **Risk** — public API changes, members that were removed but are still called, template method changes, meaningful
+  annotations, equals/hashCode, empty catch blocks, concurrency… Every reason is shown with its score.
+- **Architecture and test checks** — hexagonal architecture violations; does the changed class have a test, and was
+  it updated.
+- **Follow the flow** — click a call in the code and the target opens in a window in front; a window opened from
+  inside it cascades on top. Targets can also open in IDE-style tabs. There is also an impact map, change groups,
+  seen marks, notes and Markdown export.
 
-## İki bağımsız uygulama
+> The user interface and command-line messages are in Turkish.
 
-Depo, birbirinden bağımsız dağıtılabilen iki uygulama içerir. Her biri kendi klasöründe, **kurulum gerektirmeyen hazır
-paketiyle** (`dist/`) durur; klasörü tek başına kopyalayıp çalıştırabilirsiniz. Gereken tek şey **Node.js 20+** ve
-**git**; `npm install` gerekmez.
+## Two independent applications
 
-| | [Reviewist Yerel](local/README.md) (`local/`) | [Reviewist GitHub](github/README.md) (`github/`) |
+The repository contains two applications that can be deployed independently. Each lives in its own folder with a
+**ready-to-run package** (`dist/`) that needs no installation; you can copy the folder on its own and run it. All you
+need is **Node.js 20+** and **git**; no `npm install`.
+
+| | [Reviewist Local](local/README.md) (`local/`) | [Reviewist GitHub](github/README.md) (`github/`) |
 | --- | --- | --- |
-| Ne inceler | Bu makinedeki bir git deposu: iki dal/commit arası, commitlenmemiş çalışma ağacı, yapıştırılan patch | Uzak depo: GitHub PR'ı ya da bir deponun iki dalı |
-| Kodu nasıl alır | Depoyu yerinde okur | `git clone` / `git fetch` ile yerel önbelleğe getirir |
-| Ağ | **Hiç yok.** Uygulamada dış istek kodu bulunmaz; süreç içi çıkış bekçisi ve `git` için ağ kapalıdır | `git` uzak depoya bağlanır; uygulama yalnız PR başlığı/taban dalı için **tek** GitHub API isteği yapar |
-| Başlat | `node local/bin/reviewist-local.js` | `node github/bin/reviewist-github.js` |
-| Varsayılan adres | `http://127.0.0.1:4317` | `http://127.0.0.1:4318` |
+| What it reviews | A git repository on this machine: between two branches/commits, the uncommitted working tree, a pasted patch | A remote repository: a GitHub pull request or two branches of a repository |
+| How it gets the code | Reads the repository in place | Fetches it into a local cache with `git clone` / `git fetch` |
+| Network | **None.** The app contains no outbound request code; an in-process egress guard is active and `git` runs with networking disabled | `git` connects to the remote; the app itself makes a **single** GitHub API request for the PR title and base branch |
+| Start | `node local/bin/reviewist-local.js` | `node github/bin/reviewist-github.js` |
+| Default address | `http://127.0.0.1:4317` | `http://127.0.0.1:4318` |
 
 ```bash
-git clone <depo-adresi> reviewist
+git clone <repo-url> reviewist
 ```
 
 ```bash
 cd reviewist
 ```
 
-Her iki paketin bu makinede çalıştığını doğrulayan öz-denetim (isteğe bağlı, ~10 sn, ağa çıkmaz):
+Optional self-check that verifies both packages work on this machine (~10 s, no network):
 
 ```bash
 node scripts/smoke.mjs
 ```
 
-Yerel depo incelemek için:
+To review a local repository:
 
 ```bash
 node local/bin/reviewist-local.js
 ```
 
-Uzak depo / PR incelemek için:
+To review a remote repository or pull request:
 
 ```bash
 node github/bin/reviewist-github.js
 ```
 
-Yalnız birini dağıtmak isterseniz ilgili klasörü (`local/` ya da `github/`) kopyalamanız yeterlidir; diğer klasöre,
-`shared/` kaynaklarına ya da `node_modules`'a ihtiyaç duymaz.
+To deploy only one of them, copy just that folder (`local/` or `github/`); it does not need the other folder, the
+`shared/` sources or `node_modules`.
 
-### macOS notları
+### macOS notes
 
-- git yoksa: `xcode-select --install` (ya da Homebrew `brew install git`).
-- Uygulama bir simge/başlatıcı üzerinden açıldığında PATH kısıtlı olabilir; Reviewist git'i bilinen kurulum yerlerinde de
-  arar. Gerekirse yolu elle verin: `REVIEWIST_GIT=/opt/homebrew/bin/git node local/bin/reviewist-local.js`
-- Belgeler / Masaüstü / İndirilenler altındaki depolar için macOS, terminal uygulamasına klasör erişim izni sorabilir.
-- Koddaki bağlantılarda `Ctrl+tık` yerine `⌘+tık` kullanılır.
+- If git is missing: `xcode-select --install` (or Homebrew `brew install git`).
+- When the app is started from an icon/launcher, PATH may be restricted; Reviewist also looks for git in well-known
+  install locations. If needed, set the path explicitly:
+  `REVIEWIST_GIT=/opt/homebrew/bin/git node local/bin/reviewist-local.js`
+- For repositories under Documents / Desktop / Downloads, macOS may ask to grant the terminal app folder access.
+- Use `⌘+click` instead of `Ctrl+click` on links in the code.
 
-## Güvenlik ve gizlilik
+## Security and privacy
 
-Kodunuzun makineden çıkmaması tasarımın merkezindedir ve üç bağımsız katmanla korunur:
+Keeping your code on your machine is central to the design and is protected by three independent layers:
 
-1. **Derleme zamanı — paket denetimi.** `npm run build`, pakete giren her kütüphaneyi ve içindeki ağ/süreç
-   yeteneklerini bir izin listesiyle karşılaştırır ([scripts/lib/bundleAudit.mjs](scripts/lib/bundleAudit.mjs)).
-   Listede olmayan bir kütüphane, bir kütüphanede yeni beliren bir yetenek (ör. bir güncellemeyle gelen `fetch`), yerel
-   uygulamada herhangi bir dış istek kodu ya da arayüzde yasak bir tarayıcı API'si (WebSocket, `sendBeacon`, `eval`…)
-   bulunursa derleme durur ve paket yazılmaz. Pakete giren kütüphaneler sürümleriyle `dist/BUILD.json` içindedir.
-2. **Çalışma zamanı — çıkış bekçisi.** Sunucu süreci ve ayrıştırma işçileri açılışta Node'un ağ katmanını yamalar
-   ([shared/src/runtime/egressGuard.ts](shared/src/runtime/egressGuard.ts)): `127.0.0.1` dışındaki her TCP bağlantısı,
-   DNS sorgusu ve UDP gönderimi engellenir. Yerel uygulamada izin listesi boştur; GitHub uygulamasında yalnız GitHub
-   API sunucularına (`api.github.com` + `REVIEWIST_GITHUB_HOSTS`) izin verilir. Yerel uygulama ayrıca `git`'i tüm
-   taşıyıcılar kapalı (`protocol.allow=never`) çalıştırır.
-3. **Tarayıcı — içerik güvenlik politikası.** Her yanıt `Content-Security-Policy: default-src 'none'; connect-src
-   'self'; script-src 'self'; …` başlığıyla gelir: sayfa yalnız kendi yerel sunucusuna bağlanabilir, dış betik/resim/
-   yazı tipi yükleyemez, satır içi betik çalıştıramaz, başka sayfaya gömülemez.
+1. **Build time — bundle audit.** `npm run build` compares every library that goes into a package, and the
+   network/process capabilities inside it, against an allowlist
+   ([scripts/lib/bundleAudit.mjs](scripts/lib/bundleAudit.mjs)). The build stops and no package is written if it finds
+   a library that is not on the list, a capability that newly appeared in a library (for example a `fetch` introduced
+   by an update), any outbound request code in the local app, or a forbidden browser API in the UI (WebSocket,
+   `sendBeacon`, `eval`…). The bundled libraries and their versions are listed in `dist/BUILD.json`.
+2. **Run time — egress guard.** The server process and the parser workers patch Node's network layer at startup
+   ([shared/src/runtime/egressGuard.ts](shared/src/runtime/egressGuard.ts)): every TCP connection, DNS lookup and UDP
+   send to anything other than `127.0.0.1` is blocked. The allowlist is empty in the local app; the GitHub app allows
+   only the GitHub API hosts (`api.github.com` + `REVIEWIST_GITHUB_HOSTS`). The local app additionally runs `git`
+   with all transports disabled (`protocol.allow=never`).
+3. **Browser — content security policy.** Every response carries `Content-Security-Policy: default-src 'none';
+   connect-src 'self'; script-src 'self'; …`: the page can only talk to its own local server, cannot load external
+   scripts, images or fonts, cannot run inline scripts and cannot be embedded in another page.
 
-Ek olarak:
+In addition:
 
-- Sunucu yalnızca `127.0.0.1` üzerinde dinler; başka sitelerden ve başka makinelerden gelen istekleri reddeder (Host,
-  Origin ve `Sec-Fetch-Site` denetimleri). Aynı makinedeki diğer kullanıcı hesapları için kimlik doğrulaması yoktur;
-  paylaşılan bir makinede sunucuyu açık bırakmayın.
-- Arayüzün tüm dosyaları (yazı tipleri dahil) yerel sunucudan gelir; CDN, analitik ya da telemetri yoktur. Yapay zekâ
-  servisi çağrısı yoktur; analiz kural tabanlıdır.
-- İncelenen depo güvenilmez olabilir: git, depodaki hook'lar ve `fsmonitor` kapalı olarak çalıştırılır, sembolik bağlar
-  izlenmez, `git` her zaman tam yoluyla çağrılır (depoya konmuş sahte bir `git.exe` çalışmaz).
-- Çalışma zamanında **npm bağımlılığı yoktur**; paketler kurulum betiği çalıştırmaz.
+- The server listens only on `127.0.0.1` and rejects requests from other sites and other machines (Host, Origin and
+  `Sec-Fetch-Site` checks). There is no authentication against other user accounts on the same machine; do not leave
+  the server running on a shared machine.
+- All UI assets (including fonts) are served by the local server; there is no CDN, analytics or telemetry. No AI
+  service is called; the analysis is rule based.
+- The reviewed repository may be untrusted: git runs with hooks and `fsmonitor` disabled, symbolic links are not
+  followed, and `git` is always invoked by its full path (a fake `git.exe` placed in the repository is never run).
+- There are **no npm dependencies at run time**; the packages run no install scripts.
 
-> Bu katmanlar kazara ya da bir bağımlılık güncellemesiyle gelen veri sızıntısına karşıdır. Sürecin içinde kasıtlı ve
-> gizlenmiş kötü amaçlı kodu durdurmayı garanti etmezler; en güçlü önlem işletim sistemi güvenlik duvarında `node`
-> için giden bağlantıları kısıtlamaktır (yerel uygulama için tamamen kapatılabilir).
+> These layers guard against accidental leaks and leaks introduced by a dependency update. They do not guarantee to
+> stop deliberately hidden malicious code running inside the process; the strongest measure is restricting outbound
+> connections for `node` in the operating system firewall (they can be blocked entirely for the local app).
 
-## Kullanım ipuçları
+## Usage tips
 
-| Eylem | Sonuç |
+| Action | Result |
 | --- | --- |
-| Koddaki çağrıya / yayılım satırına **tık** | Hedef kod önde bir gözatma penceresinde açılır (iç içe açılabilir) |
-| **Shift+tık** | Hedef, sekmede açılır |
-| **⌘/Ctrl+tık** ya da orta tık | Arka planda sekme açar |
-| `j` / `k` | Okuma planında sonraki / önceki dosya |
-| `n` · `v` | Sonraki görülmemiş · görüldü işaretle |
-| `/` · `g` · `f` | Ara · etki haritası · odak modu |
-| `Esc` | Üstteki pencereyi / menüyü kapat |
-| `?` | Tüm kısayollar |
+| **Click** a call in the code / a propagation row | The target opens in a peek window in front (windows can nest) |
+| **Shift+click** | The target opens in a tab |
+| **⌘/Ctrl+click** or middle click | Opens a tab in the background |
+| `j` / `k` | Next / previous file in the reading plan |
+| `n` · `v` | Next unseen · mark as seen |
+| `/` · `g` · `f` | Search · impact map · focus mode |
+| `Esc` | Close the top window / menu |
+| `?` | All shortcuts |
 
-Panellerin arasındaki ayraçlar sürüklenebilir; görüldü işaretleri, notlar ve açık sekmeler tarayıcıda saklanır.
-İncelemeler yalnız bellekte tutulur (en çok 20); sunucu kapanınca gider.
+The dividers between panels can be dragged; seen marks, notes and open tabs are stored in the browser. Reviews are
+kept in memory only (at most 20) and are gone when the server stops.
 
-## Bilinen sınırlar
+## Known limitations
 
-- Derin analiz yalnızca **Java** içindir; Kotlin ve diğer dosyalar düz diff olarak gösterilir.
-- Çağıran ve aşırı yükleme (overload) çözümü derleyici değil, sezgiseldir; kesin eşleşmeler "olası" olanlardan ayrı
-  işaretlenir. Test ve hexagonal mimari tespiti yol/paket adlarına dayanır.
-- Repo indeksi en çok 5000 `.java` dosyasını kapsar; çok büyük etki grafikleri en riskli 600 düğümle sınırlanır.
-- Uygulamaya özel sınırlar: [local/README.md](local/README.md), [github/README.md](github/README.md).
+- Deep analysis is **Java only**; Kotlin and other files are shown as a plain diff.
+- Caller and overload resolution is heuristic, not compiler based; exact matches are marked separately from "likely"
+  ones. Test and hexagonal architecture detection relies on path/package names.
+- The repository index covers at most 5000 `.java` files; very large impact graphs are capped at the 600 riskiest
+  nodes.
+- App-specific limits: [local/README.md](local/README.md), [github/README.md](github/README.md).
 
-## Geliştirme
+## Development
 
-Geliştirme bağımlılıkları yalnızca kaynak kodu değiştirmek için gerekir (npm kayıt defterine erişim ister):
+Development dependencies are only needed to change the source code (requires access to the npm registry):
 
 ```bash
 npm install
 ```
 
-### Depo yapısı
+### Repository structure
 
 ```
-shared/            iki uygulamanın ortak kaynağı (tek başına çalışmaz; derlemede her uygulamaya gömülür)
-  src/core/        analiz motoru: tree-sitter Java, semantik diff, repo indeksi, risk, okuma planı
-  src/sources/     yerel kaynaklar: git aralığı, çalışma ağacı, patch
-  src/server/      Hono sunucusu (/api), güvenlik başlıkları, ortak başlatıcı (runServer)
-  src/runtime/     çıkış bekçisi
-  src/shared/      ortak veri modeli ve API tipleri (types.ts)
-  web/             React arayüzü (uygulamaya göre derlenir: __EDITION__)
+shared/            source shared by both apps (does not run on its own; bundled into each app at build time)
+  src/core/        analysis engine: tree-sitter Java, semantic diff, repository index, risk, reading plan
+  src/sources/     local sources: git range, working tree, patch
+  src/server/      Hono server (/api), security headers, shared launcher (runServer)
+  src/runtime/     egress guard
+  src/shared/      shared data model and API types (types.ts)
+  web/             React UI (built per app: __EDITION__)
   vendor/          tree-sitter-java (wasm)
-local/             Reviewist Yerel
-  src/             komut satırı (ağ kodu içermez)
-  bin/ dist/       çalıştırılabilir hazır paket (depoya işlenir)
+local/             Reviewist Local
+  src/             command line (contains no network code)
+  bin/ dist/       ready-to-run package (committed)
 github/            Reviewist GitHub
-  src/             komut satırı + uzak depo kaynağı (git clone/fetch, PR bilgisi, önbellek)
-  bin/ dist/       çalıştırılabilir hazır paket (depoya işlenir)
-scripts/           build, paket denetimi, öz-denetim, fikstür
+  src/             command line + remote source (git clone/fetch, PR info, cache)
+  bin/ dist/       ready-to-run package (committed)
+scripts/           build, bundle audit, self-check, fixture
 ```
 
 ```
-ReviewRequest → kaynak (yerel: shared/src/sources · uzak: github/src) → ChangeSet
+ReviewRequest → source (local: shared/src/sources · remote: github/src) → ChangeSet
 ChangeSet     → shared/src/core   → ReviewModel
 ReviewModel   → shared/src/server → shared/web
 ```
 
-Mimari ve API özeti: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · gerçek depolarda doğruluk ölçümü (tarihsel kayıt):
-[docs/QA-tur1.md](docs/QA-tur1.md)
+Architecture and API summary (in Turkish): [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · accuracy measurements on
+real repositories (historical record, in Turkish): [docs/QA-tur1.md](docs/QA-tur1.md)
 
-### Komutlar
+### Commands
 
-| Komut | Ne yapar |
+| Command | What it does |
 | --- | --- |
-| `npm start` · `npm run start:github` | Hazır paketi çalıştırır: yerel uygulama (`start`, `start:local` ile aynı) · GitHub uygulaması |
-| `npm run dev:local` + `npm run dev:web` | Yerel uygulama: sunucu (4317) ve Vite arayüzü (5173); `?mock=1` ile sunucusuz örnek veri |
-| `npm run dev:github` + `npm run dev:web:github` | GitHub uygulaması: sunucu (4318) ve Vite arayüzü (5173) |
-| `npm test` | Tüm testler (Vitest). PATH'te git ≥ 2.32 gerekir; fikstür deposu yoksa kendisi üretir |
-| `npm run typecheck` | Sunucu ve arayüz tip denetimi |
-| `npm run build` | İki paketi (`local/dist`, `github/dist`) yeniden üretir; `build:local` / `build:github` tek tek |
-| `npm run smoke` | Paketlerin tek başına (`node_modules` olmadan) çalıştığını ve kaynakla güncel olduğunu doğrular |
-| `npm run fixture` | `fixtures/sample-repo` örnek Java deposunu kurar (beklenen sonuçlar: `fixtures/EXPECTED.md`) |
-| `npm run test:perf` | Performans ölçümleri (süre eşikleriyle, tek başına) |
+| `npm start` · `npm run start:github` | Runs the ready-made package: local app (`start`, same as `start:local`) · GitHub app |
+| `npm run dev:local` + `npm run dev:web` | Local app: server (4317) and Vite UI (5173); `?mock=1` gives sample data without a server |
+| `npm run dev:github` + `npm run dev:web:github` | GitHub app: server (4318) and Vite UI (5173) |
+| `npm test` | All tests (Vitest). Needs git ≥ 2.32 on PATH; generates the fixture repository if it is missing |
+| `npm run typecheck` | Type check for server and UI |
+| `npm run build` | Rebuilds both packages (`local/dist`, `github/dist`); `build:local` / `build:github` build one |
+| `npm run smoke` | Verifies the packages run standalone (without `node_modules`) and are up to date with the source |
+| `npm run fixture` | Creates the `fixtures/sample-repo` sample Java repository (expected results: `fixtures/EXPECTED.md`) |
+| `npm run test:perf` | Performance measurements (with time thresholds, run on their own) |
 
-> **Önemli:** `local/dist` ve `github/dist` depoya işlenir. `shared/`, `local/src`, `github/src` ya da bağımlılıklar
-> değiştiğinde `npm run build` çalıştırıp iki `dist/` klasörünü de commit edin; `npm run smoke` güncel olmayan paketi
-> yakalar.
+> **Important:** `local/dist` and `github/dist` are committed. When `shared/`, `local/src`, `github/src` or the
+> dependencies change, run `npm run build` and commit both `dist/` folders as well; `npm run smoke` catches a stale
+> package.
 
-### Dış paketler
+### External packages
 
-Aşağıdakilerin hepsi derlemede paketlerin içine gömülür; çalışma zamanında kurulmaz ve ağa çıkmaz.
+All of the following are bundled into the packages at build time; nothing is installed at run time and none of them
+goes to the network.
 
-| Paket | Ne için |
+| Package | Used for |
 | --- | --- |
-| `hono`, `@hono/node-server` | Yerel HTTP sunucusu |
-| `web-tree-sitter` + `shared/vendor/tree-sitter-java` (wasm) | Java kaynağını sözdizim ağacına çevirme |
-| `diff` | Satır farkı ve patch uygulama |
-| `zod` | API isteklerinin doğrulanması |
-| `react`, `@tanstack/react-query`, `zustand`, `@xyflow/react`, `@dagrejs/dagre`, `highlight.js`, `@fontsource/*` | Arayüz |
+| `hono`, `@hono/node-server` | Local HTTP server |
+| `web-tree-sitter` + `shared/vendor/tree-sitter-java` (wasm) | Parsing Java source into a syntax tree |
+| `diff` | Line diff and patch application |
+| `zod` | Validating API requests |
+| `react`, `@tanstack/react-query`, `zustand`, `@xyflow/react`, `@dagrejs/dagre`, `highlight.js`, `@fontsource/*` | UI |
 
-Yeni bir kütüphane eklemek ya da birini güncellemek paket denetimindeki izin listesini bilinçli olarak güncellemeyi
-gerektirir. Gömülü yazılımların lisansları: [local/dist/THIRD-PARTY-LICENSES.txt](local/dist/THIRD-PARTY-LICENSES.txt),
+Adding a new library or updating one requires deliberately updating the allowlist in the bundle audit. Licenses of the
+bundled software: [local/dist/THIRD-PARTY-LICENSES.txt](local/dist/THIRD-PARTY-LICENSES.txt),
 [github/dist/THIRD-PARTY-LICENSES.txt](github/dist/THIRD-PARTY-LICENSES.txt)
 
-## Lisans
+## License
 
 [MIT](LICENSE)

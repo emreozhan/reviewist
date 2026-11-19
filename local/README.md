@@ -1,70 +1,75 @@
-# Reviewist Yerel
+# Reviewist Local
 
-Bu makinedeki bir git deposundaki Java değişikliklerini inceler. **Ağa hiç çıkmaz**: internet bağlantısı olmayan ya da
-dış erişimi kısıtlı bir makinede aynen çalışır.
+Reviews Java changes in a git repository on this machine. **It never goes to the network**: it works the same on a
+machine with no internet connection or with restricted outbound access.
 
-Bu klasör tek başına bir uygulamadır. Gereken tek şey **Node.js 20+** ve **git**; `npm install` gerekmez. Klasörü
-(`bin/`, `dist/`, `package.json`) istediğiniz yere kopyalayıp çalıştırabilirsiniz.
+This folder is a standalone application. All you need is **Node.js 20+** and **git**; no `npm install`. You can copy
+the folder (`bin/`, `dist/`, `package.json`) anywhere and run it.
 
-## Başlat
+> The user interface and command-line messages are in Turkish.
+
+## Start
 
 ```bash
 node bin/reviewist-local.js
 ```
 
-Tarayıcıda `http://127.0.0.1:4317` açılır; depo klasörünü **Gözat…** ile, dalları açılır listeden seçip **Analiz et**'e
-basın. Komut satırından doğrudan da başlatılabilir:
+The browser opens `http://127.0.0.1:4317`; pick the repository folder with **Gözat…** (Browse), choose the branches
+from the drop-downs and press **Analiz et** (Analyze). You can also start a review straight from the command line:
 
 ```bash
-node bin/reviewist-local.js /yol/depo --base main --head feature/x
+node bin/reviewist-local.js /path/to/repo --base main --head feature/x
 ```
 
 ```bash
-node bin/reviewist-local.js /yol/depo --worktree
+node bin/reviewist-local.js /path/to/repo --worktree
 ```
 
-Tüm seçenekler: `node bin/reviewist-local.js --help`
+All options: `node bin/reviewist-local.js --help`
 
-## Ne inceler
+## What it reviews
 
-| Kaynak | Açıklama |
+| Source | Description |
 | --- | --- |
-| Git aralığı | İki dal/etiket/commit; taban ile başın ortak atasından itibaren (PR görünümü) ya da doğrudan aralık |
-| Çalışma ağacı | Commitlenmemiş değişiklikler (izlenmeyen dosyalar dahil) |
-| Patch | Yapıştırılan unified diff; depo yolu verilirse çağıranlar da çözülür |
+| Git range | Two branches/tags/commits; from the common ancestor of base and head (pull request view) or the direct range |
+| Working tree | Uncommitted changes (including untracked files) |
+| Patch | A pasted unified diff; if a repository path is given, callers are resolved too |
 
-Uzak depolar ve GitHub PR'ları için ayrı uygulamayı kullanın: `reviewist-github` (depodaki `github/` klasörü).
+For remote repositories and GitHub pull requests use the separate application: `reviewist-github` (the `github/`
+folder of the repository).
 
-## Ağ ve gizlilik
+## Network and privacy
 
-- Uygulamada dış istek yapan kod **yoktur**; derleme, pakete böyle bir kod girerse durur (paket denetimi).
-- Sunucu süreci ve ayrıştırma işçileri açılışta çıkış bekçisini kurar: `127.0.0.1` dışındaki her TCP bağlantısı, DNS
-  sorgusu ve UDP gönderimi engellenir.
-- `git` tüm taşıyıcılar kapalı çalıştırılır (`protocol.allow=never`, `GIT_NO_LAZY_FETCH=1`): uygulama hiçbir koşulda
-  `fetch`/`clone` yapmaz; kısmi klonlarda eksik nesne için de uzak depoya gidilmez.
-- Sunucu yalnızca `127.0.0.1` üzerinde dinler; sayfa, içerik güvenlik politikasıyla yalnız kendi sunucusuna bağlanabilir.
-- İncelenen depoya yazılmaz: hook'lar ve `fsmonitor` kapalıdır, indeks yeniden yazılmaz, sembolik bağlar izlenmez.
+- The app contains **no** code that makes outbound requests; the build stops if such code enters the package (bundle
+  audit).
+- The server process and the parser workers install the egress guard at startup: every TCP connection, DNS lookup and
+  UDP send to anything other than `127.0.0.1` is blocked.
+- `git` runs with all transports disabled (`protocol.allow=never`, `GIT_NO_LAZY_FETCH=1`): the app never does a
+  `fetch`/`clone` under any circumstances, and does not contact the remote for missing objects in partial clones.
+- The server listens only on `127.0.0.1`; the content security policy lets the page talk only to its own server.
+- The reviewed repository is not written to: hooks and `fsmonitor` are disabled, the index is not rewritten and
+  symbolic links are not followed.
 
-İsterseniz işletim sistemi güvenlik duvarında `node` için giden bağlantıları tamamen kapatabilirsiniz; uygulama
-etkilenmez.
+If you wish, you can block outbound connections for `node` entirely in the operating system firewall; the app is not
+affected.
 
-## Ortam değişkenleri
+## Environment variables
 
-| Değişken | Ne yapar |
+| Variable | What it does |
 | --- | --- |
-| `REVIEWIST_GIT` | git çalıştırılabilir dosyasının tam yolu (PATH'te bulunamıyorsa; Windows ve macOS) |
+| `REVIEWIST_GIT` | Full path of the git executable (if it cannot be found on PATH; Windows and macOS) |
 
-## Sınırlar
+## Limits
 
-- Çalışma ağacı modu: en çok 2000 izlenmeyen dosya, dosya başına 5 MB.
-- Patch modu: depo yolu verilirse klasör yamanın uygulanmış ya da uygulanmamış hâli olabilir; her ikisi de çözülür.
-  Depo yolu yoksa yalnız yamadaki satırlar analiz edilir (çağıran bilgisi yok).
-- İncelemeler yalnız bellekte tutulur (en çok 20); sunucu kapanınca gider. Görüldü işaretleri, notlar ve sekmeler
-  tarayıcının `localStorage`'ında kalır.
+- Working tree mode: at most 2000 untracked files, 5 MB per file.
+- Patch mode: if a repository path is given, the folder may be in the patched or unpatched state; both are resolved.
+  Without a repository path only the lines in the patch are analyzed (no caller information).
+- Reviews are kept in memory only (at most 20) and are gone when the server stops. Seen marks, notes and tabs stay in
+  the browser's `localStorage`.
 
-## Paketin içeriği
+## Package contents
 
-`dist/BUILD.json` sürümü ve pakete gömülü kütüphaneleri (sürümleriyle) listeler; lisanslar
-`dist/THIRD-PARTY-LICENSES.txt` içindedir. Kaynak kod ve derleme: depo kökündeki README.
+`dist/BUILD.json` lists the version and the bundled libraries (with versions); licenses are in
+`dist/THIRD-PARTY-LICENSES.txt`. Source code and build: see the README at the repository root.
 
 [MIT](LICENSE)
